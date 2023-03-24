@@ -12,7 +12,7 @@ const FOCAL_LEN = math.cos(FOV * 0.5) / math.sin(FOV * 0.5);
 
 const DRAW_BUFFER_SIZE = N_PIXELS * 3;
 var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
-var CAM2PIX_NDC_RAYS: [DRAW_BUFFER_SIZE]f32 = undefined;
+var CAM2PIX_RAYS: [DRAW_BUFFER_SIZE]f32 = undefined;
 
 pub fn blit_f32_buffer_to_u8_buffer(
     src: []f32,
@@ -27,7 +27,7 @@ pub fn blit_f32_buffer_to_u8_buffer(
     }
 }
 
-pub fn fill_buffer_with_cam2pix_ndc_rays(
+pub fn fill_buffer_with_cam2pix_rays(
     buffer: []f32,
     width: usize,
     height: usize,
@@ -36,25 +36,25 @@ pub fn fill_buffer_with_cam2pix_ndc_rays(
     const w: f32 = @intToFloat(f32, width);
     const h: f32 = @intToFloat(f32, height);
     const aspect: f32 = w / h;
-    const pix_ndc_width: f32 = 2.0 / w;
-    const pix_ndc_height: f32 = 2.0 / h;
+    const pix_width: f32 = 2.0 / w;
+    const pix_height: f32 = 2.0 / h;
     var i_pix: usize = 0;
     var row: f32 = undefined;
     var col: f32 = undefined;
-    var row_ndc: f32 = undefined;
-    var col_ndc: f32 = undefined;
+    var x: f32 = undefined;
+    var y: f32 = undefined;
     var ray_len: f32 = undefined;
 
     while (i_pix < width * height) : (i_pix += 1) {
         row = @floor(@intToFloat(f32, i_pix) / w);
         col = @intToFloat(f32, i_pix) - w * row;
-        row_ndc = 2.0 * (h - row - 1.0) / h + 0.5 * pix_ndc_height - 1.0;
-        col_ndc = aspect * (2.0 * col / w + 0.5 * pix_ndc_width - 1.0);
+        y = 2.0 * (h - row - 1.0) / h + 0.5 * pix_height - 1.0;
+        x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
 
-        ray_len = @sqrt(col_ndc * col_ndc + row_ndc * row_ndc + focal_len * focal_len);
+        ray_len = @sqrt(x * x + y * y + focal_len * focal_len);
 
-        buffer[i_pix * 3 + 0] = col_ndc / ray_len;
-        buffer[i_pix * 3 + 1] = row_ndc / ray_len;
+        buffer[i_pix * 3 + 0] = x / ray_len;
+        buffer[i_pix * 3 + 1] = y / ray_len;
         buffer[i_pix * 3 + 2] = -focal_len / ray_len;
     }
 }
@@ -133,14 +133,14 @@ pub fn main() !void {
         "mango_uv.ppm",
     );
 
-    fill_buffer_with_cam2pix_ndc_rays(
-        &CAM2PIX_NDC_RAYS,
+    fill_buffer_with_cam2pix_rays(
+        &CAM2PIX_RAYS,
         WIDTH,
         HEIGHT,
         FOCAL_LEN,
     );
     blit_f32_buffer_to_u8_buffer(
-        &CAM2PIX_NDC_RAYS,
+        &CAM2PIX_RAYS,
         &DRAW_BUFFER,
         -1.0,
         1.0,
@@ -149,7 +149,7 @@ pub fn main() !void {
         &DRAW_BUFFER,
         WIDTH,
         HEIGHT,
-        "cam2pix_ndc_rays.ppm",
+        "cam2pix_rays.ppm",
     );
 
     var origin = [3]f32{ 0, 0, 0 };
@@ -159,7 +159,7 @@ pub fn main() !void {
     var i_pix: usize = 0;
     var k: f32 = undefined;
     while (i_pix < WIDTH * HEIGHT) : (i_pix += 1) {
-        var ray: *[3]f32 = &CAM2PIX_NDC_RAYS[i_pix * 3];
+        var ray: *[3]f32 = &CAM2PIX_RAYS[i_pix * 3];
         k = intersect_ray_with_sphere(ray, &origin, &center, radius);
         if (k > 0) {
             DRAW_BUFFER[i_pix * 3 + 0] = 255;
