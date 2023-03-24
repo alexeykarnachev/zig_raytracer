@@ -3,15 +3,12 @@ const math = std.math;
 
 const EPS = 1.0e-6;
 
-const WIDTH = 1024;
-const HEIGHT = 1024;
+const WIDTH = 1256;
+const HEIGHT = 512;
 const N_PIXELS = HEIGHT * WIDTH;
 
-const FOV = 90.0 * math.pi / 180.0;
+const FOV = 60.0 * math.pi / 180.0;
 const FOCAL_LEN = math.cos(FOV * 0.5) / math.sin(FOV * 0.5);
-
-const SPHERE_POSITION = [3]f32{ -0.5, 0.5, -0.5 };
-const SPHERE_RADIUS = 0.3;
 
 const DRAW_BUFFER_SIZE = N_PIXELS * 3;
 var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
@@ -38,6 +35,7 @@ pub fn fill_buffer_with_cam2pix_ndc_rays(
 ) void {
     const w: f32 = @intToFloat(f32, width);
     const h: f32 = @intToFloat(f32, height);
+    const aspect: f32 = w / h;
     const pix_ndc_width: f32 = 2.0 / w;
     const pix_ndc_height: f32 = 2.0 / h;
     var i_pix: usize = 0;
@@ -51,7 +49,7 @@ pub fn fill_buffer_with_cam2pix_ndc_rays(
         row = @floor(@intToFloat(f32, i_pix) / w);
         col = @intToFloat(f32, i_pix) - w * row;
         row_ndc = 2.0 * (h - row - 1.0) / h + 0.5 * pix_ndc_height - 1.0;
-        col_ndc = 2.0 * col / w + 0.5 * pix_ndc_width - 1.0;
+        col_ndc = aspect * (2.0 * col / w + 0.5 * pix_ndc_width - 1.0);
 
         ray_len = @sqrt(col_ndc * col_ndc + row_ndc * row_ndc + focal_len * focal_len);
 
@@ -95,9 +93,9 @@ pub fn fill_buffer_with_mango_uv_rgb(buffer: []u8, width: usize, height: usize) 
 }
 
 pub fn intersect_ray_with_sphere(
-    ray: [3]f32,
-    origin: [3]f32,
-    center: [3]f32,
+    ray: *[3]f32,
+    origin: *[3]f32,
+    center: *[3]f32,
     radius: f32,
 ) f32 {
     const c = [3]f32{
@@ -152,5 +150,31 @@ pub fn main() !void {
         WIDTH,
         HEIGHT,
         "cam2pix_ndc_rays.ppm",
+    );
+
+    var origin = [3]f32{ 0, 0, 0 };
+    var center = [3]f32{ 1.2, 0.0, -1.0 };
+    var radius: f32 = 0.1;
+
+    var i_pix: usize = 0;
+    var k: f32 = undefined;
+    while (i_pix < WIDTH * HEIGHT) : (i_pix += 1) {
+        var ray: *[3]f32 = &CAM2PIX_NDC_RAYS[i_pix * 3];
+        k = intersect_ray_with_sphere(ray, &origin, &center, radius);
+        if (k > 0) {
+            DRAW_BUFFER[i_pix * 3 + 0] = 255;
+            DRAW_BUFFER[i_pix * 3 + 1] = 255;
+            DRAW_BUFFER[i_pix * 3 + 2] = 255;
+        } else {
+            DRAW_BUFFER[i_pix * 3 + 0] = 30;
+            DRAW_BUFFER[i_pix * 3 + 1] = 30;
+            DRAW_BUFFER[i_pix * 3 + 2] = 80;
+        }
+    }
+    _ = try blit_buffer_to_ppm(
+        &DRAW_BUFFER,
+        WIDTH,
+        HEIGHT,
+        "flat_sphere.ppm",
     );
 }
