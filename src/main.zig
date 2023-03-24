@@ -1,11 +1,13 @@
 const std = @import("std");
 const math = std.math;
 
-const WIDTH = 800;
-const HEIGHT = 600;
+const EPS = 1.0e-6;
+
+const WIDTH = 1024;
+const HEIGHT = 1024;
 const N_PIXELS = HEIGHT * WIDTH;
 
-const FOV = math.pi / 2.0;
+const FOV = 90.0 * math.pi / 180.0;
 const FOCAL_LEN = math.cos(FOV * 0.5) / math.sin(FOV * 0.5);
 
 const SPHERE_POSITION = [3]f32{ -0.5, 0.5, -0.5 };
@@ -36,26 +38,26 @@ pub fn fill_buffer_with_cam2pix_ndc_rays(
 ) void {
     const w: f32 = @intToFloat(f32, width);
     const h: f32 = @intToFloat(f32, height);
-    const pixel_ndc_width: f32 = 2.0 / w;
-    const pixel_ndc_height: f32 = 2.0 / h;
-    var i_pixel: usize = 0;
+    const pix_ndc_width: f32 = 2.0 / w;
+    const pix_ndc_height: f32 = 2.0 / h;
+    var i_pix: usize = 0;
     var row: f32 = undefined;
     var col: f32 = undefined;
     var row_ndc: f32 = undefined;
     var col_ndc: f32 = undefined;
     var ray_len: f32 = undefined;
 
-    while (i_pixel < width * height) : (i_pixel += 1) {
-        row = @floor(@intToFloat(f32, i_pixel) / w);
-        col = @intToFloat(f32, i_pixel) - w * row;
-        row_ndc = 2.0 * (h - row - 1.0) / h + 0.5 * pixel_ndc_height - 1.0;
-        col_ndc = 2.0 * col / w + 0.5 * pixel_ndc_width - 1.0;
+    while (i_pix < width * height) : (i_pix += 1) {
+        row = @floor(@intToFloat(f32, i_pix) / w);
+        col = @intToFloat(f32, i_pix) - w * row;
+        row_ndc = 2.0 * (h - row - 1.0) / h + 0.5 * pix_ndc_height - 1.0;
+        col_ndc = 2.0 * col / w + 0.5 * pix_ndc_width - 1.0;
 
         ray_len = @sqrt(col_ndc * col_ndc + row_ndc * row_ndc + focal_len * focal_len);
 
-        buffer[i_pixel * 3 + 0] = col_ndc / ray_len;
-        buffer[i_pixel * 3 + 1] = row_ndc / ray_len;
-        buffer[i_pixel * 3 + 2] = -focal_len / ray_len;
+        buffer[i_pix * 3 + 0] = col_ndc / ray_len;
+        buffer[i_pix * 3 + 1] = row_ndc / ray_len;
+        buffer[i_pix * 3 + 2] = -focal_len / ray_len;
     }
 }
 
@@ -76,23 +78,52 @@ pub fn blit_buffer_to_ppm(
 }
 
 pub fn fill_buffer_with_mango_uv_rgb(buffer: []u8, width: usize, height: usize) void {
-    var pixel_idx: usize = 0;
-    var n_pixels: usize = width * height;
-    while (pixel_idx < n_pixels) : (pixel_idx += 1) {
-        var row: usize = pixel_idx / width;
-        var col: usize = pixel_idx - row * width;
+    const w: f32 = @intToFloat(f32, width);
+    const h: f32 = @intToFloat(f32, height);
+    var i_pix: usize = 0;
+    var row: f32 = undefined;
+    var col: f32 = undefined;
 
-        var u: f32 = @intToFloat(f32, col) / @intToFloat(f32, width);
-        var v: f32 = 1.0 - @intToFloat(f32, row) / @intToFloat(f32, height);
+    while (i_pix < width * height) : (i_pix += 1) {
+        row = @floor(@intToFloat(f32, i_pix) / w);
+        col = @intToFloat(f32, i_pix) - w * row;
 
-        var g: u8 = @floatToInt(u8, v * 255);
-        var r: u8 = @floatToInt(u8, u * 255);
-        var b: u8 = 0;
-
-        buffer[pixel_idx * 3 + 0] = r;
-        buffer[pixel_idx * 3 + 1] = g;
-        buffer[pixel_idx * 3 + 2] = b;
+        buffer[i_pix * 3 + 0] = @floatToInt(u8, 255.0 * col / w);
+        buffer[i_pix * 3 + 1] = @floatToInt(u8, 255.0 - 255.0 * row / h);
+        buffer[i_pix * 3 + 2] = 0;
     }
+}
+
+pub fn intersect_ray_with_sphere(
+    ray: [3]f32,
+    origin: [3]f32,
+    center: [3]f32,
+    radius: f32,
+) f32 {
+    const c = [3]f32{
+        origin[0] - center[0],
+        origin[1] - center[1],
+        origin[2] - center[2],
+    };
+
+    const rc: f32 = ray[0] * c[0] + ray[1] * c[1] + ray[2] * c[2];
+    var d: f32 = rc * rc - c[0] * c[0] - c[1] * c[1] - c[2] * c[2] + radius * radius;
+
+    if (d > -EPS) {
+        d = @max(d, 0);
+    } else if (d < 0) {
+        return math.nan(f32);
+    }
+
+    const k1: f32 = -rc + @sqrt(d);
+    const k2: f32 = -rc - @sqrt(d);
+    const k = @min(k1, k2);
+
+    if (k < 0) {
+        return math.nan(f32);
+    }
+
+    return k;
 }
 
 pub fn main() !void {
@@ -122,17 +153,4 @@ pub fn main() !void {
         HEIGHT,
         "cam2pix_ndc_rays.ppm",
     );
-
-    // var pixel_idx: usize = 0;
-    // var n_pixels: usize = width * height;
-    // while (pixel_idx < n_pixels) : (pixel_idx += 1) {
-    //     var row: usize = pixel_idx / width;
-    //     var col: usize = pixel_idx - row * width;
-
-    //     var u: f32 = @intToFloat(f32, col) / @intToFloat(f32, width);
-    //     var v: f32 = 1.0 - @intToFloat(f32, row) / @intToFloat(f32, height);
-
-    //
-    // }
-
 }
