@@ -1,4 +1,4 @@
 */**/*.swp
-image.ppm
+*.ppm
 zig-cache/
 zig-out/
