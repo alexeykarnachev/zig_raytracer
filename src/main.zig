@@ -12,23 +12,91 @@ const FOCAL_LEN = math.cos(FOV * 0.5) / math.sin(FOV * 0.5);
 
 const DRAW_BUFFER_SIZE = N_PIXELS * 3;
 var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
-var CAM2PIX_RAYS: [DRAW_BUFFER_SIZE]f32 = undefined;
+var CAM2PIX_RAYS: [N_PIXELS]Vec3 = undefined;
 
-pub fn blit_f32_buffer_to_u8_buffer(
-    src: []f32,
-    dst: []u8,
-    min_src_val: f32,
-    max_src_val: f32,
-) void {
-    const len = @min(src.len, dst.len);
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        dst[i] = @floatToInt(u8, 255.0 * (src[i] - min_src_val) / (max_src_val - min_src_val));
+const OBJECTS_BUFFER_SIZE = 1 << 12;
+var N_OBJECTS = 0;
+var OBJECTS: [OBJECTS_BUFFER_SIZE]void = undefined;
+
+// ------------------------------------------------------------------
+// Vector
+const Vec3 = struct {
+    x: f32,
+    y: f32,
+    z: f32,
+
+    pub fn init(x: f32, y: f32, z: f32) Vec3 {
+        return Vec3{ .x = x, .y = y, .z = z };
     }
-}
+
+    pub fn from_slice(s: [3]f32) Vec3 {
+        return Vec3{ .x = s[0], .y = s[1], .z = s[2] };
+    }
+
+    pub fn dot(self: Vec3, other: Vec3) f32 {
+        return self.x * other.x + self.y * other.y + self.z * other.z;
+    }
+
+    pub fn sub(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.init(
+            self.x - other.x,
+            self.y - other.y,
+            self.z - other.z,
+        );
+    }
+
+    pub fn add(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.init(
+            self.x + other.x,
+            self.y + other.y,
+            self.z + other.z,
+        );
+    }
+
+    pub fn scale(self: Vec3, k: f32) Vec3 {
+        return Vec3.init(self.x / k, self.y / k, self.z / k);
+    }
+
+    pub fn print(self: Vec3) void {
+        std.debug.print("({}, {}, {})\n", .{ self.x, self.y, self.z });
+    }
+};
+
+// ------------------------------------------------------------------
+// Shapes
+const Shape = enum {
+    plane,
+    sphere,
+};
+
+const Plane = struct {
+    shape: Shape = Shape.plane,
+    point: [3]f32,
+    normal: [3]f32,
+};
+
+const Sphere = struct {
+    shape: Shape = Shape.sphere,
+    center: [3]f32,
+    radius: f32,
+};
+
+// ------------------------------------------------------------------
+// Materials
+const Material = enum {
+    PlaneColor,
+};
+
+const PlaneColor = struct {
+    material: Material = Material.debug,
+    color: [3]u8,
+};
+
+// ------------------------------------------------------------------
+// Buffers functions
 
 pub fn fill_buffer_with_cam2pix_rays(
-    buffer: []f32,
+    buffer: []Vec3,
     width: usize,
     height: usize,
     focal_len: f32,
@@ -52,10 +120,7 @@ pub fn fill_buffer_with_cam2pix_rays(
         x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
 
         ray_len = @sqrt(x * x + y * y + focal_len * focal_len);
-
-        buffer[i_pix * 3 + 0] = x / ray_len;
-        buffer[i_pix * 3 + 1] = y / ray_len;
-        buffer[i_pix * 3 + 2] = -focal_len / ray_len;
+        buffer[i_pix] = Vec3.init(x, y, -focal_len).scale(1.0 / ray_len);
     }
 }
 
@@ -92,20 +157,17 @@ pub fn fill_buffer_with_mango_uv_rgb(buffer: []u8, width: usize, height: usize) 
     }
 }
 
+// ------------------------------------------------------------------
+// Ray intersection functions
 pub fn intersect_ray_with_sphere(
-    ray: [3]f32,
-    origin: [3]f32,
-    center: [3]f32,
+    ray: Vec3,
+    origin: Vec3,
+    center: Vec3,
     radius: f32,
 ) f32 {
-    const c = [3]f32{
-        origin[0] - center[0],
-        origin[1] - center[1],
-        origin[2] - center[2],
-    };
-
-    const rc: f32 = ray[0] * c[0] + ray[1] * c[1] + ray[2] * c[2];
-    var d: f32 = rc * rc - c[0] * c[0] - c[1] * c[1] - c[2] * c[2] + radius * radius;
+    const c = origin.sub(center);
+    const rc = ray.dot(c);
+    var d = rc * rc + radius * radius - c.dot(c);
 
     if (d > -EPS) {
         d = @max(d, 0);
@@ -113,9 +175,7 @@ pub fn intersect_ray_with_sphere(
         return math.nan(f32);
     }
 
-    const k1: f32 = -rc + @sqrt(d);
-    const k2: f32 = -rc - @sqrt(d);
-    const k = @min(k1, k2);
+    const k = @min(-rc + @sqrt(d), -rc - @sqrt(d));
 
     if (k < 0) {
         return math.nan(f32);
@@ -125,75 +185,69 @@ pub fn intersect_ray_with_sphere(
 }
 
 pub fn intersect_ray_with_plane(
-    ray: [3]f32,
-    origin: [3]f32,
-    point: [3]f32,
-    normal: [3]f32,
+    ray: Vec3,
+    origin: Vec3,
+    point: Vec3,
+    normal: Vec3,
 ) f32 {
-    const d = ray[0] * normal[0] + ray[1] * normal[1] + ray[2] * normal[2];
+    // const d = ray[0] * normal[0] + ray[1] * normal[1] + ray[2] * normal[2];
 
+    // if (math.fabs(d) < EPS) {
+    //     return math.nan(f32);
+    // }
+
+    // const v = [3]f32{ point[0] - origin[0], point[1] - origin[1], point[2] - origin[2] };
+    // const n = normal[0] * v[0] + normal[1] * v[1] + normal[2] * v[2];
+    // const k = n / d;
+
+    // return k;
+
+    const d = ray.dot(normal);
     if (math.fabs(d) < EPS) {
         return math.nan(f32);
     }
 
-    const v = [3]f32{ point[0] - origin[0], point[1] - origin[1], point[2] - origin[2] };
-    const n = normal[0] * v[0] + normal[1] * v[1] + normal[2] * v[2];
-    const k = n / d;
+    const k = normal.dot(point.sub(origin)) / d;
+
+    if (k < 0) {
+        return math.nan(f32);
+    }
 
     return k;
 }
 
 pub fn main() !void {
-    fill_buffer_with_mango_uv_rgb(&DRAW_BUFFER, WIDTH, HEIGHT);
-    _ = try blit_buffer_to_ppm(
-        &DRAW_BUFFER,
-        WIDTH,
-        HEIGHT,
-        "mango_uv.ppm",
-    );
-
     fill_buffer_with_cam2pix_rays(
         &CAM2PIX_RAYS,
         WIDTH,
         HEIGHT,
         FOCAL_LEN,
     );
-    blit_f32_buffer_to_u8_buffer(
-        &CAM2PIX_RAYS,
-        &DRAW_BUFFER,
-        -1.0,
-        1.0,
-    );
-    _ = try blit_buffer_to_ppm(
-        &DRAW_BUFFER,
-        WIDTH,
-        HEIGHT,
-        "cam2pix_rays.ppm",
-    );
 
-    var origin = [3]f32{ 0.0, 0.0, 0.0 };
+    // const plane: Plane = Plane.init();
+
+    var origin = Vec3.init(0.0, 0.0, 0.0);
     // var center = [3]f32{ 1.2, 0.0, -1.0 };
     // var radius: f32 = 1.0;
 
-    var point = [3]f32{0.0, -1.0, 0.0};
-    var normal = [3]f32{0.0, 1.0, 0.0};
+    var point = Vec3.init(0.0, -1.0, 0.0);
+    var normal = Vec3.init(0.1, 1.0, 0.0);
 
-    var ray: [3]f32 = undefined;
     var k: f32 = undefined;
     var i: usize = 0;
-    while (i < DRAW_BUFFER_SIZE) : (i += 3) {
-        std.mem.copy(f32, &ray, CAM2PIX_RAYS[i .. i + 3]);
+    while (i < N_PIXELS) : (i += 1) {
+        var ray = CAM2PIX_RAYS[i];
         k = intersect_ray_with_plane(ray, origin, point, normal);
         // k = intersect_ray_with_sphere(ray, origin, center, radius);
 
         if (k > 0) {
-            DRAW_BUFFER[i + 0] = 255;
-            DRAW_BUFFER[i + 1] = 255;
-            DRAW_BUFFER[i + 2] = 255;
+            DRAW_BUFFER[i * 3 + 0] = 255;
+            DRAW_BUFFER[i * 3 + 1] = 255;
+            DRAW_BUFFER[i * 3 + 2] = 255;
         } else {
-            DRAW_BUFFER[i + 0] = 30;
-            DRAW_BUFFER[i + 1] = 30;
-            DRAW_BUFFER[i + 2] = 80;
+            DRAW_BUFFER[i * 3 + 0] = 30;
+            DRAW_BUFFER[i * 3 + 1] = 30;
+            DRAW_BUFFER[i * 3 + 2] = 80;
         }
     }
     _ = try blit_buffer_to_ppm(
