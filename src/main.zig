@@ -3,8 +3,8 @@ const math = std.math;
 
 const EPS = 1.0e-6;
 
-const WIDTH = 1256;
-const HEIGHT = 512;
+const WIDTH = 1000;
+const HEIGHT = 1000;
 const N_PIXELS = HEIGHT * WIDTH;
 
 const FOV = 60.0 * math.pi / 180.0;
@@ -93,9 +93,9 @@ pub fn fill_buffer_with_mango_uv_rgb(buffer: []u8, width: usize, height: usize) 
 }
 
 pub fn intersect_ray_with_sphere(
-    ray: *[3]f32,
-    origin: *[3]f32,
-    center: *[3]f32,
+    ray: [3]f32,
+    origin: [3]f32,
+    center: [3]f32,
     radius: f32,
 ) f32 {
     const c = [3]f32{
@@ -120,6 +120,25 @@ pub fn intersect_ray_with_sphere(
     if (k < 0) {
         return math.nan(f32);
     }
+
+    return k;
+}
+
+pub fn intersect_ray_with_plane(
+    ray: [3]f32,
+    origin: [3]f32,
+    point: [3]f32,
+    normal: [3]f32,
+) f32 {
+    const d = ray[0] * normal[0] + ray[1] * normal[1] + ray[2] * normal[2];
+
+    if (math.fabs(d) < EPS) {
+        return math.nan(f32);
+    }
+
+    const v = [3]f32{ point[0] - origin[0], point[1] - origin[1], point[2] - origin[2] };
+    const n = normal[0] * v[0] + normal[1] * v[1] + normal[2] * v[2];
+    const k = n / d;
 
     return k;
 }
@@ -152,23 +171,29 @@ pub fn main() !void {
         "cam2pix_rays.ppm",
     );
 
-    var origin = [3]f32{ 0, 0, 0 };
-    var center = [3]f32{ 1.2, 0.0, -1.0 };
-    var radius: f32 = 0.1;
+    var origin = [3]f32{ 0.0, 0.0, 0.0 };
+    // var center = [3]f32{ 1.2, 0.0, -1.0 };
+    // var radius: f32 = 1.0;
 
-    var i_pix: usize = 0;
+    var point = [3]f32{0.0, -1.0, 0.0};
+    var normal = [3]f32{0.0, 1.0, 0.0};
+
+    var ray: [3]f32 = undefined;
     var k: f32 = undefined;
-    while (i_pix < WIDTH * HEIGHT) : (i_pix += 1) {
-        var ray: *[3]f32 = &CAM2PIX_RAYS[i_pix * 3];
-        k = intersect_ray_with_sphere(ray, &origin, &center, radius);
+    var i: usize = 0;
+    while (i < DRAW_BUFFER_SIZE) : (i += 3) {
+        std.mem.copy(f32, &ray, CAM2PIX_RAYS[i .. i + 3]);
+        k = intersect_ray_with_plane(ray, origin, point, normal);
+        // k = intersect_ray_with_sphere(ray, origin, center, radius);
+
         if (k > 0) {
-            DRAW_BUFFER[i_pix * 3 + 0] = 255;
-            DRAW_BUFFER[i_pix * 3 + 1] = 255;
-            DRAW_BUFFER[i_pix * 3 + 2] = 255;
+            DRAW_BUFFER[i + 0] = 255;
+            DRAW_BUFFER[i + 1] = 255;
+            DRAW_BUFFER[i + 2] = 255;
         } else {
-            DRAW_BUFFER[i_pix * 3 + 0] = 30;
-            DRAW_BUFFER[i_pix * 3 + 1] = 30;
-            DRAW_BUFFER[i_pix * 3 + 2] = 80;
+            DRAW_BUFFER[i + 0] = 30;
+            DRAW_BUFFER[i + 1] = 30;
+            DRAW_BUFFER[i + 2] = 80;
         }
     }
     _ = try blit_buffer_to_ppm(
