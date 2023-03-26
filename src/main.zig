@@ -3,8 +3,8 @@ const math = std.math;
 
 const EPS = 1.0e-6;
 
-const WIDTH = 1000;
-const HEIGHT = 500;
+const WIDTH = 800;
+const HEIGHT = 600;
 const N_PIXELS = HEIGHT * WIDTH;
 
 const FOV = 90.0 * math.pi / 180.0;
@@ -114,8 +114,7 @@ const PlaneColor = packed struct {
 };
 
 // ------------------------------------------------------------------
-// Buffers functions
-
+// Buffer functions
 pub fn fill_buffer_with_cam2pix_rays(
     buffer: []Vec3,
     width: usize,
@@ -159,12 +158,11 @@ pub fn blit_buffer_to_ppm(
 pub fn intersect_ray_with_sphere(
     ray: Vec3,
     origin: Vec3,
-    center: Vec3,
-    radius: f32,
+    sphere: Sphere,
 ) f32 {
-    const c = origin.sub(center);
+    const c = origin.sub(sphere.center);
     const rc: f32 = ray.dot(c);
-    var d: f32 = rc * rc - c.dot(c) + radius * radius;
+    var d: f32 = rc * rc - c.dot(c) + sphere.radius * sphere.radius;
 
     if (d > -EPS) {
         d = @max(d, 0);
@@ -184,15 +182,14 @@ pub fn intersect_ray_with_sphere(
 pub fn intersect_ray_with_plane(
     ray: Vec3,
     origin: Vec3,
-    point: Vec3,
-    normal: Vec3,
+    plane: Plane,
 ) f32 {
-    const d = ray.dot(normal);
+    const d = ray.dot(plane.normal);
     if (math.fabs(d) < EPS) {
         return math.nan(f32);
     }
 
-    const k = normal.dot(point.sub(origin)) / d;
+    const k = plane.normal.dot(plane.point.sub(origin)) / d;
 
     if (k < 0) {
         return math.nan(f32);
@@ -200,10 +197,6 @@ pub fn intersect_ray_with_plane(
 
     return k;
 }
-
-const RaytracerError = error{
-    UnknownShape,
-};
 
 pub fn main() !void {
     fill_buffer_with_cam2pix_rays(
@@ -231,12 +224,12 @@ pub fn main() !void {
             switch (shape) {
                 Shape.sphere => {
                     var sphere: Sphere = @ptrCast(*Sphere, @alignCast(@alignOf(*Sphere), ptr)).*;
-                    k = @max(k, intersect_ray_with_sphere(ray, origin, sphere.center, sphere.radius));
+                    k = @max(k, intersect_ray_with_sphere(ray, origin, sphere));
                     ptr += @sizeOf(Sphere);
                 },
                 Shape.plane => {
                     var plane: Plane = @ptrCast(*Plane, @alignCast(@alignOf(*Plane), ptr)).*;
-                    k = @max(k, intersect_ray_with_plane(ray, origin, plane.point, plane.normal));
+                    k = @max(k, intersect_ray_with_plane(ray, origin, plane));
                     ptr += @sizeOf(Plane);
                 },
             }
