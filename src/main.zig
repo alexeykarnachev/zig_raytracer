@@ -2,9 +2,10 @@ const std = @import("std");
 const math = std.math;
 
 const EPS = 1.0e-6;
+const HIT_DIST_EPS = 0.999;
 
-const SCREEN_WIDTH = 800;
-const SCREEN_HEIGHT = 600;
+const SCREEN_WIDTH = 1000;
+const SCREEN_HEIGHT = 1000;
 const N_PIXELS = SCREEN_HEIGHT * SCREEN_WIDTH;
 
 const FOV = 90.0 * math.pi / 180.0;
@@ -33,14 +34,6 @@ const Vec3 = packed struct {
         return Vec3{ .x = x, .y = y, .z = z };
     }
 
-    pub fn dot(self: Vec3, other: Vec3) f32 {
-        return self.x * other.x + self.y * other.y + self.z * other.z;
-    }
-
-    pub fn length(self: Vec3) f32 {
-        return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
-    }
-
     pub fn sub(self: Vec3, other: Vec3) Vec3 {
         return Vec3.init(
             self.x - other.x,
@@ -57,12 +50,28 @@ const Vec3 = packed struct {
         );
     }
 
+    pub fn mult(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.init(
+            self.x * other.x,
+            self.y * other.y,
+            self.z * other.z,
+        );
+    }
+
     pub fn scale(self: Vec3, k: f32) Vec3 {
         return Vec3.init(self.x * k, self.y * k, self.z * k);
     }
 
     pub fn normalize(self: Vec3) Vec3 {
         return self.scale(1.0 / self.length());
+    }
+
+    pub fn dot(self: Vec3, other: Vec3) f32 {
+        return self.x * other.x + self.y * other.y + self.z * other.z;
+    }
+
+    pub fn length(self: Vec3) f32 {
+        return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
 };
 
@@ -76,6 +85,13 @@ const ShapeType = enum(u8) {
 const ShapeHeader = packed struct {
     type: ShapeType,
     material_ptr: [*]u8,
+
+    pub fn from_bytes(bytes: [*]u8) ShapeHeader {
+        return @ptrCast(
+            *ShapeHeader,
+            @alignCast(@alignOf(*ShapeHeader), bytes),
+        ).*;
+    }
 };
 
 const Plane = packed struct {
@@ -116,6 +132,11 @@ const Plane = packed struct {
         }
 
         return k;
+    }
+
+    pub fn reflect_ray(self: Plane, inp_ray: Vec3) Vec3 {
+        var reflected = inp_ray.sub(self.normal.scale(2.0 * inp_ray.dot(self.normal)));
+        return reflected.normalize();
     }
 };
 
@@ -160,31 +181,51 @@ const Sphere = packed struct {
 
         return k;
     }
+
+    pub fn reflect_ray(self: Sphere, inp_ray: Vec3, origin: Vec3) Vec3 {
+        var normal = origin.sub(self.center).normalize();
+        var reflected = inp_ray.sub(normal.scale(2.0 * inp_ray.dot(normal)));
+        return reflected.normalize();
+    }
 };
 
 // ------------------------------------------------------------------
 // Materials
 const MaterialType = enum(u8) {
-    const_color,
+    diffuse,
 };
 
-const ConstColor = packed struct {
-    material_type: MaterialType = MaterialType.const_color,
-    color: Vec3,
+const Diffuse = packed struct {
+    material_type: MaterialType = MaterialType.diffuse,
+    attenuation: Vec3,
 
-    pub fn alloc(color: Vec3) [*]u8 {
-        const const_color = ConstColor{ .color = color };
-        const size = @sizeOf(ConstColor);
+    pub fn alloc(attenuation: Vec3) [*]u8 {
+        const diffuse = Diffuse{ .attenuation = attenuation };
+        const size = @sizeOf(Diffuse);
         var ptr: [*]u8 = MATERIALS_BUFFER_TAIL;
-        @memcpy(ptr, std.mem.asBytes(&const_color), size);
+        @memcpy(ptr, std.mem.asBytes(&diffuse), size);
         MATERIALS_BUFFER_TAIL += size;
         return ptr;
     }
 
-    pub fn from_bytes(bytes: [*]u8) ConstColor {
-        return @ptrCast(*ConstColor, @alignCast(@alignOf(*ConstColor), bytes)).*;
+    pub fn from_bytes(bytes: [*]u8) Diffuse {
+        return @ptrCast(*Diffuse, @alignCast(@alignOf(*Diffuse), bytes)).*;
     }
 };
+
+pub fn get_material_attenuation(material_ptr: [*]u8) Vec3 {
+    var material_type: MaterialType = @ptrCast(
+        *MaterialType,
+        @alignCast(@alignOf(*MaterialType), material_ptr),
+    ).*;
+
+    switch (material_type) {
+        MaterialType.diffuse => {
+            var diffuse = Diffuse.from_bytes(material_ptr);
+            return diffuse.attenuation;
+        },
+    }
+}
 
 // ------------------------------------------------------------------
 // Camera and rays functions
@@ -204,6 +245,67 @@ pub fn get_cam2pix_ray(
     var y = 2.0 * (h - row - 1.0) / h + 0.5 * pix_height - 1.0;
     var x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
     return Vec3.init(x, y, -focal_len).normalize();
+}
+
+pub fn cast_ray(origin: Vec3, ray: Vec3) Vec3 {
+    var attenuation: Vec3 = Vec3.init(1.0, 0.8, 0.3);
+    var hit_origin = origin;
+    var hit_ray = ray;
+
+    var i_step: usize = 0;
+    while (i_step < 64) : (i_step += 1) {
+        var i_obj: usize = 0;
+        var shapes_ptr: [*]u8 = &SHAPES;
+        var hit_dist: f32 = math.inf(f32);
+        var hit_shape_ptr: [*]u8 = undefined;
+        while (i_obj < N_SHAPES) : (i_obj += 1) {
+            var header: ShapeHeader = @ptrCast(
+                *ShapeHeader,
+                @alignCast(@alignOf(*ShapeHeader), shapes_ptr),
+            ).*;
+            var curr_hit_dist: f32 = undefined;
+            var curr_hit_shape_ptr: [*]u8 = shapes_ptr;
+            switch (header.type) {
+                ShapeType.sphere => {
+                    var sphere = Sphere.from_bytes(shapes_ptr);
+                    curr_hit_dist = sphere.intersect_with_ray(hit_origin, hit_ray);
+                    shapes_ptr += @sizeOf(Sphere);
+                },
+                ShapeType.plane => {
+                    var plane = Plane.from_bytes(shapes_ptr);
+                    curr_hit_dist = plane.intersect_with_ray(hit_origin, hit_ray);
+                    shapes_ptr += @sizeOf(Plane);
+                },
+            }
+
+            if (curr_hit_dist < hit_dist) {
+                hit_dist = curr_hit_dist;
+                hit_shape_ptr = curr_hit_shape_ptr;
+            }
+        }
+
+        if (hit_dist < math.inf(f32)) {
+            hit_dist *= HIT_DIST_EPS;
+            var header = ShapeHeader.from_bytes(hit_shape_ptr);
+            hit_origin = hit_origin.add(hit_ray.scale(hit_dist));
+            switch (header.type) {
+                ShapeType.plane => {
+                    var plane = Plane.from_bytes(hit_shape_ptr);
+                    hit_ray = plane.reflect_ray(hit_ray);
+                },
+                ShapeType.sphere => {
+                    var sphere = Sphere.from_bytes(hit_shape_ptr);
+                    hit_ray = sphere.reflect_ray(hit_ray, hit_origin);
+                },
+            }
+
+            attenuation = attenuation.mult(get_material_attenuation(header.material_ptr));
+        } else {
+            return attenuation;
+        }
+    }
+
+    return Vec3.init(0.0, 0.0, 0.0);
 }
 
 // ------------------------------------------------------------------
@@ -227,75 +329,44 @@ pub fn blit_buffer_to_ppm(
 pub fn main() !void {
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
-    var red_const_color: [*]u8 = ConstColor.alloc(
-        Vec3.init(0.8, 0.2, 0.2),
+    var red_diffuse: [*]u8 = Diffuse.alloc(
+        Vec3.init(1.0, 0.9, 0.9),
     );
-    var green_const_color: [*]u8 = ConstColor.alloc(
-        Vec3.init(0.2, 0.8, 0.2),
+    var green_diffuse: [*]u8 = Diffuse.alloc(
+        Vec3.init(0.9, 1.0, 0.9),
     );
-    var blue_const_color: [*]u8 = ConstColor.alloc(
-        Vec3.init(0.2, 0.2, 0.8),
-    );
-    var cian_const_color: [*]u8 = ConstColor.alloc(
-        Vec3.init(0.2, 0.8, 0.8),
+    var blue_diffuse: [*]u8 = Diffuse.alloc(
+        Vec3.init(0.5, 0.5, 0.7),
     );
 
     Sphere.alloc(
         Vec3.init(0.5, 0.5, -2.0),
         1.0,
-        red_const_color,
+        red_diffuse,
     );
     Sphere.alloc(
         Vec3.init(-0.5, -0.5, -4.0),
         1.0,
-        green_const_color,
+        green_diffuse,
+    );
+    Sphere.alloc(
+        Vec3.init(-2.5, 1.0, -4.0),
+        1.0,
+        green_diffuse,
     );
     Plane.alloc(
         Vec3.init(0.0, -1.0, 0.0),
-        Vec3.init(0.3, 1.0, -0.6),
-        blue_const_color,
+        Vec3.init(0.3, 1.0, -0.2),
+        blue_diffuse,
     );
 
     var i_pix: usize = 0;
     while (i_pix < N_PIXELS) : (i_pix += 1) {
         var ray = get_cam2pix_ray(i_pix, SCREEN_WIDTH, SCREEN_HEIGHT, FOCAL_LEN);
-        var i_obj: usize = 0;
-        var shapes_ptr: [*]u8 = &SHAPES;
-        var min_hit_dist: f32 = math.inf(f32);
-        var min_hit_material_ptr: [*]u8 = cian_const_color;
-        while (i_obj < N_SHAPES) : (i_obj += 1) {
-            var header: ShapeHeader = @ptrCast(
-                *ShapeHeader,
-                @alignCast(@alignOf(*ShapeHeader), shapes_ptr),
-            ).*;
-            var curr_hit_dist: f32 = undefined;
-            var curr_hit_material_ptr: [*]u8 = header.material_ptr;
-            switch (header.type) {
-                ShapeType.sphere => {
-                    var sphere = Sphere.from_bytes(shapes_ptr);
-                    curr_hit_dist = sphere.intersect_with_ray(origin, ray);
-                    shapes_ptr += @sizeOf(Sphere);
-                },
-                ShapeType.plane => {
-                    var plane = Plane.from_bytes(shapes_ptr);
-                    curr_hit_dist = plane.intersect_with_ray(origin, ray);
-                    shapes_ptr += @sizeOf(Plane);
-                },
-            }
-
-            if (curr_hit_dist < min_hit_dist) {
-                min_hit_dist = curr_hit_dist;
-                min_hit_material_ptr = curr_hit_material_ptr;
-            }
-        }
-
-        var material: ConstColor = @ptrCast(
-            *ConstColor,
-            @alignCast(@alignOf(*ConstColor), min_hit_material_ptr),
-        ).*;
-        DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, material.color.x * 255);
-        DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, material.color.y * 255);
-        DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, material.color.z * 255);
+        var pix_color = cast_ray(origin, ray);
+        DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, pix_color.x * 255);
+        DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, pix_color.y * 255);
+        DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, pix_color.z * 255);
     }
     _ = try blit_buffer_to_ppm(
         &DRAW_BUFFER,
