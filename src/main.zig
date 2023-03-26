@@ -91,6 +91,21 @@ const Plane = packed struct {
     pub fn from_bytes(bytes: [*]u8) Plane {
         return @ptrCast(*Plane, @alignCast(@alignOf(*Plane), bytes)).*;
     }
+
+    pub fn intersect_with_ray(self: Plane, origin: Vec3, ray: Vec3) f32 {
+        const d = ray.dot(self.normal);
+        if (math.fabs(d) < EPS) {
+            return math.nan(f32);
+        }
+
+        const k = self.normal.dot(self.point.sub(origin)) / d;
+
+        if (k < 0) {
+            return math.nan(f32);
+        }
+
+        return k;
+    }
 };
 
 const Sphere = packed struct {
@@ -110,6 +125,27 @@ const Sphere = packed struct {
     pub fn from_bytes(bytes: [*]u8) Sphere {
         return @ptrCast(*Sphere, @alignCast(@alignOf(*Sphere), bytes)).*;
     }
+
+    pub fn intersect_with_ray(self: Sphere, origin: Vec3, ray: Vec3) f32 {
+        const c = origin.sub(self.center);
+        const rc: f32 = ray.dot(c);
+        var d: f32 = rc * rc - c.dot(c) + self.radius * self.radius;
+
+        if (d > -EPS) {
+            d = @max(d, 0);
+        } else if (d < 0) {
+            return math.nan(f32);
+        }
+
+        const k = @min(-rc + @sqrt(d), -rc - @sqrt(d));
+
+        if (k < 0) {
+            return math.nan(f32);
+        }
+
+        return k;
+    }
+
 };
 
 // ------------------------------------------------------------------
@@ -176,51 +212,6 @@ pub fn blit_buffer_to_ppm(
     _ = try out_file.write(buffer);
 }
 
-// ------------------------------------------------------------------
-// Ray intersection functions
-pub fn intersect_ray_with_sphere(
-    ray: Vec3,
-    origin: Vec3,
-    sphere: Sphere,
-) f32 {
-    const c = origin.sub(sphere.center);
-    const rc: f32 = ray.dot(c);
-    var d: f32 = rc * rc - c.dot(c) + sphere.radius * sphere.radius;
-
-    if (d > -EPS) {
-        d = @max(d, 0);
-    } else if (d < 0) {
-        return math.nan(f32);
-    }
-
-    const k = @min(-rc + @sqrt(d), -rc - @sqrt(d));
-
-    if (k < 0) {
-        return math.nan(f32);
-    }
-
-    return k;
-}
-
-pub fn intersect_ray_with_plane(
-    ray: Vec3,
-    origin: Vec3,
-    plane: Plane,
-) f32 {
-    const d = ray.dot(plane.normal);
-    if (math.fabs(d) < EPS) {
-        return math.nan(f32);
-    }
-
-    const k = plane.normal.dot(plane.point.sub(origin)) / d;
-
-    if (k < 0) {
-        return math.nan(f32);
-    }
-
-    return k;
-}
-
 pub fn main() !void {
     fill_buffer_with_cam2pix_rays(
         &CAM2PIX_RAYS,
@@ -231,44 +222,65 @@ pub fn main() !void {
 
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
-    var red_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.8, 0.2, 0.2));
-    var green_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.2, 0.8, 0.2));
-    var blue_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.2, 0.2, 0.8));
+    var red_const_color: [*]u8 = ConstColor.alloc(
+        Vec3.init(0.8, 0.2, 0.2),
+    );
+    var green_const_color: [*]u8 = ConstColor.alloc(
+        Vec3.init(0.2, 0.8, 0.2),
+    );
+    var blue_const_color: [*]u8 = ConstColor.alloc(
+        Vec3.init(0.2, 0.2, 0.8),
+    );
 
-    Sphere.alloc(Vec3.init(0.5, 0.5, -2.0), 1.0, red_const_color);
-    Sphere.alloc(Vec3.init(-0.5, -0.5, -4.0), 1.0, green_const_color);
-    Plane.alloc(Vec3.init(0.0, -1.0, 0.0), Vec3.init(0.3, 1.0, -0.6), blue_const_color);
+    Sphere.alloc(
+        Vec3.init(0.5, 0.5, -2.0),
+        1.0,
+        red_const_color,
+    );
+    Sphere.alloc(
+        Vec3.init(-0.5, -0.5, -4.0),
+        1.0,
+        green_const_color,
+    );
+    Plane.alloc(
+        Vec3.init(0.0, -1.0, 0.0),
+        Vec3.init(0.3, 1.0, -0.6),
+        blue_const_color,
+    );
 
     var i_pix: usize = 0;
     while (i_pix < N_PIXELS) : (i_pix += 1) {
         var ray = CAM2PIX_RAYS[i_pix];
 
         var i_obj: usize = 0;
-        var ptr: [*]u8 = &SHAPES;
-        var min_dist: f32 = math.nan(f32);
+        var shapes_ptr: [*]u8 = &SHAPES;
+        var min_hit_dist: f32 = math.nan(f32);
         while (i_obj < N_SHAPES) : (i_obj += 1) {
-            var shape_type: ShapeType = @ptrCast(*ShapeType, @alignCast(@alignOf(*ShapeType), ptr)).*;
-            var dist: f32 = undefined;
+            var shape_type: ShapeType = @ptrCast(
+                *ShapeType,
+                @alignCast(@alignOf(*ShapeType), shapes_ptr),
+            ).*;
+            var curr_hit_dist: f32 = undefined;
             switch (shape_type) {
                 ShapeType.sphere => {
-                    var sphere = Sphere.from_bytes(ptr);
-                    dist = intersect_ray_with_sphere(ray, origin, sphere);
-                    ptr += @sizeOf(Sphere);
+                    var sphere = Sphere.from_bytes(shapes_ptr);
+                    curr_hit_dist = sphere.intersect_with_ray(origin, ray);
+                    shapes_ptr += @sizeOf(Sphere);
                 },
                 ShapeType.plane => {
-                    var plane = Plane.from_bytes(ptr);
-                    dist = intersect_ray_with_plane(ray, origin, plane);
-                    ptr += @sizeOf(Plane);
+                    var plane = Plane.from_bytes(shapes_ptr);
+                    curr_hit_dist = plane.intersect_with_ray(origin, ray);
+                    shapes_ptr += @sizeOf(Plane);
                 },
             }
 
-            min_dist = @min(min_dist, dist);
+            min_hit_dist = @min(min_hit_dist, curr_hit_dist);
         }
 
-        if (min_dist > 0) {
-            DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, 255 - min_dist * 25);
-            DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, 255 - min_dist * 25);
-            DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, 255 - min_dist * 25);
+        if (min_hit_dist > 0) {
+            DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, 255 - min_hit_dist * 25);
+            DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, 255 - min_hit_dist * 25);
+            DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, 255 - min_hit_dist * 25);
         } else {
             DRAW_BUFFER[i_pix * 3 + 0] = 30;
             DRAW_BUFFER[i_pix * 3 + 1] = 30;
