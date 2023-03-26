@@ -3,8 +3,8 @@ const math = std.math;
 
 const EPS = 1.0e-6;
 
-const WIDTH = 1200;
-const HEIGHT = 600;
+const WIDTH = 1000;
+const HEIGHT = 500;
 const N_PIXELS = HEIGHT * WIDTH;
 
 const FOV = 90.0 * math.pi / 180.0;
@@ -15,12 +15,13 @@ var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
 var CAM2PIX_RAYS: [N_PIXELS]Vec3 = undefined;
 
 const OBJECTS_BUFFER_SIZE = 1 << 12;
-var N_OBJECTS = 0;
-var OBJECTS: [OBJECTS_BUFFER_SIZE]void = undefined;
+var N_OBJECTS: usize = 0;
+var OBJECTS: [OBJECTS_BUFFER_SIZE]u8 = undefined;
+var OBJECTS_BUFFER_TAIL: [*]u8 = &OBJECTS;
 
 // ------------------------------------------------------------------
 // Vector
-const Vec3 = struct {
+const Vec3 = packed struct {
     x: f32,
     y: f32,
     z: f32,
@@ -68,21 +69,37 @@ const Vec3 = struct {
 
 // ------------------------------------------------------------------
 // Shapes
-const Shape = enum {
+const Shape = enum(u8) {
     plane,
     sphere,
 };
 
-const Plane = struct {
+const Plane = packed struct {
     shape: Shape = Shape.plane,
-    point: [3]f32,
-    normal: [3]f32,
+    point: Vec3,
+    normal: Vec3,
+
+    pub fn alloc(point: Vec3, normal: Vec3) void {
+        const plane = Plane{ .point = point, .normal = normal };
+        const size = @sizeOf(Plane);
+        @memcpy(OBJECTS_BUFFER_TAIL, std.mem.asBytes(&plane), size);
+        OBJECTS_BUFFER_TAIL += size;
+        N_OBJECTS += 1;
+    }
 };
 
-const Sphere = struct {
+const Sphere = packed struct {
     shape: Shape = Shape.sphere,
-    center: [3]f32,
+    center: Vec3,
     radius: f32,
+
+    pub fn alloc(center: Vec3, radius: f32) void {
+        const sphere = Sphere{ .center = center, .radius = radius };
+        const size = @sizeOf(Sphere);
+        @memcpy(OBJECTS_BUFFER_TAIL, std.mem.asBytes(&sphere), size);
+        OBJECTS_BUFFER_TAIL += size;
+        N_OBJECTS += 1;
+    }
 };
 
 // ------------------------------------------------------------------
@@ -91,9 +108,9 @@ const Material = enum {
     PlaneColor,
 };
 
-const PlaneColor = struct {
+const PlaneColor = packed struct {
     material: Material = Material.debug,
-    color: [3]u8,
+    color: Vec3,
 };
 
 // ------------------------------------------------------------------
@@ -145,14 +162,9 @@ pub fn intersect_ray_with_sphere(
     center: Vec3,
     radius: f32,
 ) f32 {
-    const c = [3]f32{
-        origin.x - center.x,
-        origin.y - center.y,
-        origin.z - center.z,
-    };
-
-    const rc: f32 = ray.x * c[0] + ray.y * c[1] + ray.z * c[2];
-    var d: f32 = rc * rc - c[0] * c[0] - c[1] * c[1] - c[2] * c[2] + radius * radius;
+    const c = origin.sub(center);
+    const rc: f32 = ray.dot(c);
+    var d: f32 = rc * rc - c.dot(c) + radius * radius;
 
     if (d > -EPS) {
         d = @max(d, 0);
@@ -160,9 +172,7 @@ pub fn intersect_ray_with_sphere(
         return math.nan(f32);
     }
 
-    const k1: f32 = -rc + @sqrt(d);
-    const k2: f32 = -rc - @sqrt(d);
-    const k = @min(k1, k2);
+    const k = @min(-rc + @sqrt(d), -rc - @sqrt(d));
 
     if (k < 0) {
         return math.nan(f32);
@@ -191,6 +201,10 @@ pub fn intersect_ray_with_plane(
     return k;
 }
 
+const RaytracerError = error{
+    UnknownShape,
+};
+
 pub fn main() !void {
     fill_buffer_with_cam2pix_rays(
         &CAM2PIX_RAYS,
@@ -200,27 +214,42 @@ pub fn main() !void {
     );
 
     var origin = Vec3.init(0.0, 0.0, 0.0);
-    var center = Vec3.init(0.3, 0.3, -1.0);
-    var radius: f32 = 0.3;
 
-    var point = Vec3.init(0.0, -1.0, 0.0);
-    var normal = Vec3.init(0.1, 1.0, 0.0);
+    Sphere.alloc(Vec3.init(0.3, 0.3, -1.0), 0.3);
+    Sphere.alloc(Vec3.init(-0.3, -0.3, -1.0), 0.3);
+    Plane.alloc(Vec3.init(0.0, -1.0, 0.0), Vec3.init(0.3, 1.0, -0.6));
 
-    var i: usize = 0;
-    while (i < N_PIXELS) : (i += 1) {
-        var ray = CAM2PIX_RAYS[i];
-        var p = intersect_ray_with_plane(ray, origin, point, normal);
-        var s = intersect_ray_with_sphere(ray, origin, center, radius);
-        var k = @max(p, s);
+    var i_pix: usize = 0;
+    while (i_pix < N_PIXELS) : (i_pix += 1) {
+        var ray = CAM2PIX_RAYS[i_pix];
+
+        var i_obj: usize = 0;
+        var ptr: [*]u8 = &OBJECTS;
+        var k: f32 = -1;
+        while (i_obj < N_OBJECTS) : (i_obj += 1) {
+            var shape: Shape = @ptrCast(*Shape, @alignCast(@alignOf(*Shape), ptr)).*;
+            switch (shape) {
+                Shape.sphere => {
+                    var sphere: Sphere = @ptrCast(*Sphere, @alignCast(@alignOf(*Sphere), ptr)).*;
+                    k = @max(k, intersect_ray_with_sphere(ray, origin, sphere.center, sphere.radius));
+                    ptr += @sizeOf(Sphere);
+                },
+                Shape.plane => {
+                    var plane: Plane = @ptrCast(*Plane, @alignCast(@alignOf(*Plane), ptr)).*;
+                    k = @max(k, intersect_ray_with_plane(ray, origin, plane.point, plane.normal));
+                    ptr += @sizeOf(Plane);
+                },
+            }
+        }
 
         if (k > 0) {
-            DRAW_BUFFER[i * 3 + 0] = 255;
-            DRAW_BUFFER[i * 3 + 1] = 255;
-            DRAW_BUFFER[i * 3 + 2] = 255;
+            DRAW_BUFFER[i_pix * 3 + 0] = 255;
+            DRAW_BUFFER[i_pix * 3 + 1] = 255;
+            DRAW_BUFFER[i_pix * 3 + 2] = 255;
         } else {
-            DRAW_BUFFER[i * 3 + 0] = 30;
-            DRAW_BUFFER[i * 3 + 1] = 30;
-            DRAW_BUFFER[i * 3 + 2] = 80;
+            DRAW_BUFFER[i_pix * 3 + 0] = 30;
+            DRAW_BUFFER[i_pix * 3 + 1] = 30;
+            DRAW_BUFFER[i_pix * 3 + 2] = 80;
         }
     }
     _ = try blit_buffer_to_ppm(
