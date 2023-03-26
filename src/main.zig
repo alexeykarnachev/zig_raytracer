@@ -14,10 +14,14 @@ const DRAW_BUFFER_SIZE = N_PIXELS * 3;
 var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
 var CAM2PIX_RAYS: [N_PIXELS]Vec3 = undefined;
 
-const OBJECTS_BUFFER_SIZE = 1 << 12;
-var N_OBJECTS: usize = 0;
-var OBJECTS: [OBJECTS_BUFFER_SIZE]u8 = undefined;
-var OBJECTS_BUFFER_TAIL: [*]u8 = &OBJECTS;
+const SHAPES_BUFFER_SIZE = 1 << 12;
+var SHAPES: [SHAPES_BUFFER_SIZE]u8 = undefined;
+var SHAPES_BUFFER_TAIL: [*]u8 = &SHAPES;
+var N_SHAPES: usize = 0;
+
+const MATERIALS_BUFFER_SIZE = 1 << 12;
+var MATERIALS: [MATERIALS_BUFFER_SIZE]u8 = undefined;
+var MATERIALS_BUFFER_TAIL: [*]u8 = &MATERIALS;
 
 // ------------------------------------------------------------------
 // Vector
@@ -61,30 +65,27 @@ const Vec3 = packed struct {
     pub fn normalize(self: Vec3) Vec3 {
         return self.scale(1.0 / self.length());
     }
-
-    pub fn print(self: Vec3) void {
-        std.debug.print("({}, {}, {})\n", .{ self.x, self.y, self.z });
-    }
 };
 
 // ------------------------------------------------------------------
 // Shapes
-const Shape = enum(u8) {
+const ShapeType = enum(u8) {
     plane,
     sphere,
 };
 
 const Plane = packed struct {
-    shape: Shape = Shape.plane,
+    shape_type: ShapeType = ShapeType.plane,
+    material: [*]u8,
     point: Vec3,
     normal: Vec3,
 
-    pub fn alloc(point: Vec3, normal: Vec3) void {
-        const plane = Plane{ .point = point, .normal = normal };
+    pub fn alloc(point: Vec3, normal: Vec3, material: [*]u8) void {
+        const plane = Plane{ .point = point, .normal = normal, .material = material };
         const size = @sizeOf(Plane);
-        @memcpy(OBJECTS_BUFFER_TAIL, std.mem.asBytes(&plane), size);
-        OBJECTS_BUFFER_TAIL += size;
-        N_OBJECTS += 1;
+        @memcpy(SHAPES_BUFFER_TAIL, std.mem.asBytes(&plane), size);
+        SHAPES_BUFFER_TAIL += size;
+        N_SHAPES += 1;
     }
 
     pub fn from_bytes(bytes: [*]u8) Plane {
@@ -93,16 +94,17 @@ const Plane = packed struct {
 };
 
 const Sphere = packed struct {
-    shape: Shape = Shape.sphere,
+    shape_type: ShapeType = ShapeType.sphere,
+    material: [*]u8,
     center: Vec3,
     radius: f32,
 
-    pub fn alloc(center: Vec3, radius: f32) void {
-        const sphere = Sphere{ .center = center, .radius = radius };
+    pub fn alloc(center: Vec3, radius: f32, material: [*]u8) void {
+        const sphere = Sphere{ .center = center, .radius = radius, .material = material };
         const size = @sizeOf(Sphere);
-        @memcpy(OBJECTS_BUFFER_TAIL, std.mem.asBytes(&sphere), size);
-        OBJECTS_BUFFER_TAIL += size;
-        N_OBJECTS += 1;
+        @memcpy(SHAPES_BUFFER_TAIL, std.mem.asBytes(&sphere), size);
+        SHAPES_BUFFER_TAIL += size;
+        N_SHAPES += 1;
     }
 
     pub fn from_bytes(bytes: [*]u8) Sphere {
@@ -112,13 +114,26 @@ const Sphere = packed struct {
 
 // ------------------------------------------------------------------
 // Materials
-const Material = enum {
-    PlaneColor,
+const MaterialType = enum(u8) {
+    const_color,
 };
 
-const PlaneColor = packed struct {
-    material: Material = Material.debug,
+const ConstColor = packed struct {
+    material_type: MaterialType = MaterialType.const_color,
     color: Vec3,
+
+    pub fn alloc(color: Vec3) [*]u8 {
+        const const_color = ConstColor{ .color = color };
+        const size = @sizeOf(ConstColor);
+        var ptr: [*]u8 = MATERIALS_BUFFER_TAIL;
+        @memcpy(ptr, std.mem.asBytes(&const_color), size);
+        MATERIALS_BUFFER_TAIL += size;
+        return ptr;
+    }
+
+    pub fn from_bytes(bytes: [*]u8) ConstColor {
+        return @ptrCast(*ConstColor, @alignCast(@alignOf(*ConstColor), bytes)).*;
+    }
 };
 
 // ------------------------------------------------------------------
@@ -216,27 +231,31 @@ pub fn main() !void {
 
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
-    Sphere.alloc(Vec3.init(0.5, 0.5, -2.0), 1.0);
-    Sphere.alloc(Vec3.init(-0.5, -0.5, -4.0), 1.0);
-    Plane.alloc(Vec3.init(0.0, -1.0, 0.0), Vec3.init(0.3, 1.0, -0.6));
+    var red_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.8, 0.2, 0.2));
+    var green_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.2, 0.8, 0.2));
+    var blue_const_color: [*]u8 = ConstColor.alloc(Vec3.init(0.2, 0.2, 0.8));
+
+    Sphere.alloc(Vec3.init(0.5, 0.5, -2.0), 1.0, red_const_color);
+    Sphere.alloc(Vec3.init(-0.5, -0.5, -4.0), 1.0, green_const_color);
+    Plane.alloc(Vec3.init(0.0, -1.0, 0.0), Vec3.init(0.3, 1.0, -0.6), blue_const_color);
 
     var i_pix: usize = 0;
     while (i_pix < N_PIXELS) : (i_pix += 1) {
         var ray = CAM2PIX_RAYS[i_pix];
 
         var i_obj: usize = 0;
-        var ptr: [*]u8 = &OBJECTS;
+        var ptr: [*]u8 = &SHAPES;
         var min_dist: f32 = math.nan(f32);
-        while (i_obj < N_OBJECTS) : (i_obj += 1) {
-            var shape: Shape = @ptrCast(*Shape, @alignCast(@alignOf(*Shape), ptr)).*;
+        while (i_obj < N_SHAPES) : (i_obj += 1) {
+            var shape_type: ShapeType = @ptrCast(*ShapeType, @alignCast(@alignOf(*ShapeType), ptr)).*;
             var dist: f32 = undefined;
-            switch (shape) {
-                Shape.sphere => {
+            switch (shape_type) {
+                ShapeType.sphere => {
                     var sphere = Sphere.from_bytes(ptr);
                     dist = intersect_ray_with_sphere(ray, origin, sphere);
                     ptr += @sizeOf(Sphere);
                 },
-                Shape.plane => {
+                ShapeType.plane => {
                     var plane = Plane.from_bytes(ptr);
                     dist = intersect_ray_with_plane(ray, origin, plane);
                     ptr += @sizeOf(Plane);
