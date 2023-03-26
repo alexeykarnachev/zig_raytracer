@@ -3,16 +3,15 @@ const math = std.math;
 
 const EPS = 1.0e-6;
 
-const WIDTH = 800;
-const HEIGHT = 600;
-const N_PIXELS = HEIGHT * WIDTH;
+const SCREEN_WIDTH = 800;
+const SCREEN_HEIGHT = 600;
+const N_PIXELS = SCREEN_HEIGHT * SCREEN_WIDTH;
 
 const FOV = 90.0 * math.pi / 180.0;
 const FOCAL_LEN = math.cos(FOV * 0.5) / math.sin(FOV * 0.5);
 
 const DRAW_BUFFER_SIZE = N_PIXELS * 3;
 var DRAW_BUFFER: [DRAW_BUFFER_SIZE]u8 = undefined;
-var CAM2PIX_RAYS: [N_PIXELS]Vec3 = undefined;
 
 const SHAPES_BUFFER_SIZE = 1 << 12;
 var SHAPES: [SHAPES_BUFFER_SIZE]u8 = undefined;
@@ -74,14 +73,26 @@ const ShapeType = enum(u8) {
     sphere,
 };
 
+const ShapeHeader = packed struct {
+    type: ShapeType,
+    material_ptr: [*]u8,
+};
+
 const Plane = packed struct {
-    shape_type: ShapeType = ShapeType.plane,
-    material: [*]u8,
+    header: ShapeHeader,
     point: Vec3,
     normal: Vec3,
 
-    pub fn alloc(point: Vec3, normal: Vec3, material: [*]u8) void {
-        const plane = Plane{ .point = point, .normal = normal, .material = material };
+    pub fn alloc(point: Vec3, normal: Vec3, material_ptr: [*]u8) void {
+        const header = ShapeHeader{
+            .type = ShapeType.plane,
+            .material_ptr = material_ptr,
+        };
+        const plane = Plane{
+            .header = header,
+            .point = point,
+            .normal = normal,
+        };
         const size = @sizeOf(Plane);
         @memcpy(SHAPES_BUFFER_TAIL, std.mem.asBytes(&plane), size);
         SHAPES_BUFFER_TAIL += size;
@@ -109,13 +120,17 @@ const Plane = packed struct {
 };
 
 const Sphere = packed struct {
-    shape_type: ShapeType = ShapeType.sphere,
-    material: [*]u8,
+    header: ShapeHeader,
     center: Vec3,
     radius: f32,
 
-    pub fn alloc(center: Vec3, radius: f32, material: [*]u8) void {
-        const sphere = Sphere{ .center = center, .radius = radius, .material = material };
+    pub fn alloc(center: Vec3, radius: f32, material_ptr: [*]u8) void {
+        const header = ShapeHeader{ .type = ShapeType.sphere, .material_ptr = material_ptr };
+        const sphere = Sphere{
+            .header = header,
+            .center = center,
+            .radius = radius,
+        };
         const size = @sizeOf(Sphere);
         @memcpy(SHAPES_BUFFER_TAIL, std.mem.asBytes(&sphere), size);
         SHAPES_BUFFER_TAIL += size;
@@ -145,7 +160,6 @@ const Sphere = packed struct {
 
         return k;
     }
-
 };
 
 // ------------------------------------------------------------------
@@ -173,33 +187,31 @@ const ConstColor = packed struct {
 };
 
 // ------------------------------------------------------------------
-// Buffer functions
-pub fn fill_buffer_with_cam2pix_rays(
-    buffer: []Vec3,
-    width: usize,
-    height: usize,
+// Camera and rays functions
+pub fn get_cam2pix_ray(
+    i_pix: usize,
+    screen_width: usize,
+    screen_height: usize,
     focal_len: f32,
-) void {
-    const w: f32 = @intToFloat(f32, width);
-    const h: f32 = @intToFloat(f32, height);
+) Vec3 {
+    const w: f32 = @intToFloat(f32, screen_width);
+    const h: f32 = @intToFloat(f32, screen_height);
     const aspect: f32 = w / h;
     const pix_width: f32 = 2.0 / w;
     const pix_height: f32 = 2.0 / h;
-
-    var i_pix: usize = 0;
-    while (i_pix < width * height) : (i_pix += 1) {
-        var row = @floor(@intToFloat(f32, i_pix) / w);
-        var col = @intToFloat(f32, i_pix) - w * row;
-        var y = 2.0 * (h - row - 1.0) / h + 0.5 * pix_height - 1.0;
-        var x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
-        buffer[i_pix] = Vec3.init(x, y, -focal_len).normalize();
-    }
+    var row = @floor(@intToFloat(f32, i_pix) / w);
+    var col = @intToFloat(f32, i_pix) - w * row;
+    var y = 2.0 * (h - row - 1.0) / h + 0.5 * pix_height - 1.0;
+    var x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
+    return Vec3.init(x, y, -focal_len).normalize();
 }
 
+// ------------------------------------------------------------------
+// Buffer functions
 pub fn blit_buffer_to_ppm(
     buffer: []u8,
-    width: usize,
-    height: usize,
+    screen_width: usize,
+    screen_height: usize,
     file_path: []const u8,
 ) !void {
     var out_file = try std.fs.cwd().createFile(file_path, .{});
@@ -207,19 +219,12 @@ pub fn blit_buffer_to_ppm(
 
     try out_file.writer().print(
         "P6\n{} {}\n255\n",
-        .{ width, height },
+        .{ screen_width, screen_height },
     );
     _ = try out_file.write(buffer);
 }
 
 pub fn main() !void {
-    fill_buffer_with_cam2pix_rays(
-        &CAM2PIX_RAYS,
-        WIDTH,
-        HEIGHT,
-        FOCAL_LEN,
-    );
-
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
     var red_const_color: [*]u8 = ConstColor.alloc(
@@ -230,6 +235,9 @@ pub fn main() !void {
     );
     var blue_const_color: [*]u8 = ConstColor.alloc(
         Vec3.init(0.2, 0.2, 0.8),
+    );
+    var cian_const_color: [*]u8 = ConstColor.alloc(
+        Vec3.init(0.2, 0.8, 0.8),
     );
 
     Sphere.alloc(
@@ -250,18 +258,19 @@ pub fn main() !void {
 
     var i_pix: usize = 0;
     while (i_pix < N_PIXELS) : (i_pix += 1) {
-        var ray = CAM2PIX_RAYS[i_pix];
-
+        var ray = get_cam2pix_ray(i_pix, SCREEN_WIDTH, SCREEN_HEIGHT, FOCAL_LEN);
         var i_obj: usize = 0;
         var shapes_ptr: [*]u8 = &SHAPES;
-        var min_hit_dist: f32 = math.nan(f32);
+        var min_hit_dist: f32 = math.inf(f32);
+        var min_hit_material_ptr: [*]u8 = cian_const_color;
         while (i_obj < N_SHAPES) : (i_obj += 1) {
-            var shape_type: ShapeType = @ptrCast(
-                *ShapeType,
-                @alignCast(@alignOf(*ShapeType), shapes_ptr),
+            var header: ShapeHeader = @ptrCast(
+                *ShapeHeader,
+                @alignCast(@alignOf(*ShapeHeader), shapes_ptr),
             ).*;
             var curr_hit_dist: f32 = undefined;
-            switch (shape_type) {
+            var curr_hit_material_ptr: [*]u8 = header.material_ptr;
+            switch (header.type) {
                 ShapeType.sphere => {
                     var sphere = Sphere.from_bytes(shapes_ptr);
                     curr_hit_dist = sphere.intersect_with_ray(origin, ray);
@@ -274,23 +283,24 @@ pub fn main() !void {
                 },
             }
 
-            min_hit_dist = @min(min_hit_dist, curr_hit_dist);
+            if (curr_hit_dist < min_hit_dist) {
+                min_hit_dist = curr_hit_dist;
+                min_hit_material_ptr = curr_hit_material_ptr;
+            }
         }
 
-        if (min_hit_dist > 0) {
-            DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, 255 - min_hit_dist * 25);
-            DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, 255 - min_hit_dist * 25);
-            DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, 255 - min_hit_dist * 25);
-        } else {
-            DRAW_BUFFER[i_pix * 3 + 0] = 30;
-            DRAW_BUFFER[i_pix * 3 + 1] = 30;
-            DRAW_BUFFER[i_pix * 3 + 2] = 80;
-        }
+        var material: ConstColor = @ptrCast(
+            *ConstColor,
+            @alignCast(@alignOf(*ConstColor), min_hit_material_ptr),
+        ).*;
+        DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, material.color.x * 255);
+        DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, material.color.y * 255);
+        DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, material.color.z * 255);
     }
     _ = try blit_buffer_to_ppm(
         &DRAW_BUFFER,
-        WIDTH,
-        HEIGHT,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
         "flat_sphere.ppm",
     );
 }
