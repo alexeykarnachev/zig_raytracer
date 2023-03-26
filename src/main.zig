@@ -86,6 +86,10 @@ const Plane = packed struct {
         OBJECTS_BUFFER_TAIL += size;
         N_OBJECTS += 1;
     }
+
+    pub fn from_bytes(bytes: [*]u8) Plane {
+        return @ptrCast(*Plane, @alignCast(@alignOf(*Plane), bytes)).*;
+    }
 };
 
 const Sphere = packed struct {
@@ -99,6 +103,10 @@ const Sphere = packed struct {
         @memcpy(OBJECTS_BUFFER_TAIL, std.mem.asBytes(&sphere), size);
         OBJECTS_BUFFER_TAIL += size;
         N_OBJECTS += 1;
+    }
+
+    pub fn from_bytes(bytes: [*]u8) Sphere {
+        return @ptrCast(*Sphere, @alignCast(@alignOf(*Sphere), bytes)).*;
     }
 };
 
@@ -208,8 +216,8 @@ pub fn main() !void {
 
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
-    Sphere.alloc(Vec3.init(0.3, 0.3, -1.0), 0.3);
-    Sphere.alloc(Vec3.init(-0.3, -0.3, -1.0), 0.3);
+    Sphere.alloc(Vec3.init(0.5, 0.5, -2.0), 1.0);
+    Sphere.alloc(Vec3.init(-0.5, -0.5, -4.0), 1.0);
     Plane.alloc(Vec3.init(0.0, -1.0, 0.0), Vec3.init(0.3, 1.0, -0.6));
 
     var i_pix: usize = 0;
@@ -218,27 +226,30 @@ pub fn main() !void {
 
         var i_obj: usize = 0;
         var ptr: [*]u8 = &OBJECTS;
-        var k: f32 = -1;
+        var min_dist: f32 = math.nan(f32);
         while (i_obj < N_OBJECTS) : (i_obj += 1) {
             var shape: Shape = @ptrCast(*Shape, @alignCast(@alignOf(*Shape), ptr)).*;
+            var dist: f32 = undefined;
             switch (shape) {
                 Shape.sphere => {
-                    var sphere: Sphere = @ptrCast(*Sphere, @alignCast(@alignOf(*Sphere), ptr)).*;
-                    k = @max(k, intersect_ray_with_sphere(ray, origin, sphere));
+                    var sphere = Sphere.from_bytes(ptr);
+                    dist = intersect_ray_with_sphere(ray, origin, sphere);
                     ptr += @sizeOf(Sphere);
                 },
                 Shape.plane => {
-                    var plane: Plane = @ptrCast(*Plane, @alignCast(@alignOf(*Plane), ptr)).*;
-                    k = @max(k, intersect_ray_with_plane(ray, origin, plane));
+                    var plane = Plane.from_bytes(ptr);
+                    dist = intersect_ray_with_plane(ray, origin, plane);
                     ptr += @sizeOf(Plane);
                 },
             }
+
+            min_dist = @min(min_dist, dist);
         }
 
-        if (k > 0) {
-            DRAW_BUFFER[i_pix * 3 + 0] = 255;
-            DRAW_BUFFER[i_pix * 3 + 1] = 255;
-            DRAW_BUFFER[i_pix * 3 + 2] = 255;
+        if (min_dist > 0) {
+            DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, 255 - min_dist * 25);
+            DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, 255 - min_dist * 25);
+            DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, 255 - min_dist * 25);
         } else {
             DRAW_BUFFER[i_pix * 3 + 0] = 30;
             DRAW_BUFFER[i_pix * 3 + 1] = 30;
