@@ -1,10 +1,13 @@
 const std = @import("std");
+const vec = @import("vec.zig");
+
+const Vec3 = vec.Vec3;
 const math = std.math;
 var rnd = std.rand.DefaultPrng.init(0);
 
 const EPS = 1.0e-6;
 const HIT_DIST_EPS = 0.999;
-const N_AA_STEPS = 400;
+const N_AA_STEPS = 4;
 const BLUR_RADIUS = 2.0;
 const N_STEPS = 16;
 
@@ -26,66 +29,6 @@ var N_SHAPES: usize = 0;
 const MATERIALS_BUFFER_SIZE = 1 << 12;
 var MATERIALS: [MATERIALS_BUFFER_SIZE]u8 = undefined;
 var MATERIALS_BUFFER_TAIL: [*]u8 = &MATERIALS;
-
-// ------------------------------------------------------------------
-// Vector
-const Vec3 = packed struct {
-    x: f32,
-    y: f32,
-    z: f32,
-
-    pub fn init(x: f32, y: f32, z: f32) Vec3 {
-        return Vec3{ .x = x, .y = y, .z = z };
-    }
-
-    pub fn sub(self: Vec3, other: Vec3) Vec3 {
-        return Vec3.init(
-            self.x - other.x,
-            self.y - other.y,
-            self.z - other.z,
-        );
-    }
-
-    pub fn add(self: Vec3, other: Vec3) Vec3 {
-        return Vec3.init(
-            self.x + other.x,
-            self.y + other.y,
-            self.z + other.z,
-        );
-    }
-
-    pub fn mult(self: Vec3, other: Vec3) Vec3 {
-        return Vec3.init(
-            self.x * other.x,
-            self.y * other.y,
-            self.z * other.z,
-        );
-    }
-
-    pub fn scale(self: Vec3, k: f32) Vec3 {
-        return Vec3.init(self.x * k, self.y * k, self.z * k);
-    }
-
-    pub fn normalize(self: Vec3) Vec3 {
-        return self.scale(1.0 / self.length());
-    }
-
-    pub fn min(self: Vec3, other: Vec3) Vec3 {
-        return Vec3.init(
-            @min(self.x, other.x),
-            @min(self.y, other.y),
-            @min(self.z, other.z),
-        );
-    }
-
-    pub fn dot(self: Vec3, other: Vec3) f32 {
-        return self.x * other.x + self.y * other.y + self.z * other.z;
-    }
-
-    pub fn length(self: Vec3) f32 {
-        return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
-    }
-};
 
 // ------------------------------------------------------------------
 // Shapes
@@ -147,7 +90,7 @@ const Plane = packed struct {
     }
 
     pub fn reflect_ray(self: Plane, _: Vec3) Vec3 {
-        var reflected = self.normal.add(get_rnd_vec_on_sphere());
+        var reflected = self.normal.add(Vec3.init_rnd_on_sphere());
         return reflected.normalize();
     }
 };
@@ -196,7 +139,7 @@ const Sphere = packed struct {
 
     pub fn reflect_ray(self: Sphere, _: Vec3, origin: Vec3) Vec3 {
         var normal = origin.sub(self.center).normalize();
-        var reflected = normal.add(get_rnd_vec_on_sphere());
+        var reflected = normal.add(Vec3.init_rnd_on_sphere());
         return reflected.normalize();
     }
 };
@@ -237,19 +180,6 @@ pub fn get_material_attenuation(material_ptr: [*]u8) Vec3 {
             return diffuse.attenuation;
         },
     }
-}
-
-pub fn get_rnd_vec_on_sphere() Vec3 {
-    var a = rnd.random().float(f32);
-    var b = rnd.random().float(f32);
-    var theta = 2.0 * math.pi * a;
-    var phi = math.acos(2.0 * b - 1.0);
-    var scattered = Vec3.init(
-        math.cos(theta) * math.sin(phi),
-        math.sin(theta) * math.sin(phi),
-        math.cos(phi),
-    );
-    return scattered.normalize();
 }
 
 // ------------------------------------------------------------------
