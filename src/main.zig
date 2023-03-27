@@ -1,11 +1,15 @@
 const std = @import("std");
 const math = std.math;
+var rnd = std.rand.DefaultPrng.init(0);
 
 const EPS = 1.0e-6;
 const HIT_DIST_EPS = 0.999;
+const N_AA_STEPS = 400;
+const BLUR_RADIUS = 2.0;
+const N_STEPS = 16;
 
-const SCREEN_WIDTH = 1000;
-const SCREEN_HEIGHT = 1000;
+const SCREEN_WIDTH = 400;
+const SCREEN_HEIGHT = 400;
 const N_PIXELS = SCREEN_HEIGHT * SCREEN_WIDTH;
 
 const FOV = 90.0 * math.pi / 180.0;
@@ -64,6 +68,14 @@ const Vec3 = packed struct {
 
     pub fn normalize(self: Vec3) Vec3 {
         return self.scale(1.0 / self.length());
+    }
+
+    pub fn min(self: Vec3, other: Vec3) Vec3 {
+        return Vec3.init(
+            @min(self.x, other.x),
+            @min(self.y, other.y),
+            @min(self.z, other.z),
+        );
     }
 
     pub fn dot(self: Vec3, other: Vec3) f32 {
@@ -134,8 +146,8 @@ const Plane = packed struct {
         return k;
     }
 
-    pub fn reflect_ray(self: Plane, inp_ray: Vec3) Vec3 {
-        var reflected = inp_ray.sub(self.normal.scale(2.0 * inp_ray.dot(self.normal)));
+    pub fn reflect_ray(self: Plane, _: Vec3) Vec3 {
+        var reflected = self.normal.add(get_rnd_vec_on_sphere());
         return reflected.normalize();
     }
 };
@@ -182,9 +194,9 @@ const Sphere = packed struct {
         return k;
     }
 
-    pub fn reflect_ray(self: Sphere, inp_ray: Vec3, origin: Vec3) Vec3 {
+    pub fn reflect_ray(self: Sphere, _: Vec3, origin: Vec3) Vec3 {
         var normal = origin.sub(self.center).normalize();
-        var reflected = inp_ray.sub(normal.scale(2.0 * inp_ray.dot(normal)));
+        var reflected = normal.add(get_rnd_vec_on_sphere());
         return reflected.normalize();
     }
 };
@@ -227,6 +239,19 @@ pub fn get_material_attenuation(material_ptr: [*]u8) Vec3 {
     }
 }
 
+pub fn get_rnd_vec_on_sphere() Vec3 {
+    var a = rnd.random().float(f32);
+    var b = rnd.random().float(f32);
+    var theta = 2.0 * math.pi * a;
+    var phi = math.acos(2.0 * b - 1.0);
+    var scattered = Vec3.init(
+        math.cos(theta) * math.sin(phi),
+        math.sin(theta) * math.sin(phi),
+        math.cos(phi),
+    );
+    return scattered.normalize();
+}
+
 // ------------------------------------------------------------------
 // Camera and rays functions
 pub fn get_cam2pix_ray(
@@ -244,16 +269,20 @@ pub fn get_cam2pix_ray(
     var col = @intToFloat(f32, i_pix) - w * row;
     var y = 2.0 * (h - row - 1.0) / h + 0.5 * pix_height - 1.0;
     var x = aspect * (2.0 * col / w + 0.5 * pix_width - 1.0);
+
+    x += pix_width * rnd.random().float(f32) * BLUR_RADIUS;
+    y += pix_height * rnd.random().float(f32) * BLUR_RADIUS;
+
     return Vec3.init(x, y, -focal_len).normalize();
 }
 
 pub fn cast_ray(origin: Vec3, ray: Vec3) Vec3 {
-    var attenuation: Vec3 = Vec3.init(1.0, 0.8, 0.3);
+    var attenuation: Vec3 = Vec3.init(2.0, 1.9, 1.7);
     var hit_origin = origin;
     var hit_ray = ray;
 
     var i_step: usize = 0;
-    while (i_step < 64) : (i_step += 1) {
+    while (i_step < N_STEPS) : (i_step += 1) {
         var i_obj: usize = 0;
         var shapes_ptr: [*]u8 = &SHAPES;
         var hit_dist: f32 = math.inf(f32);
@@ -298,10 +327,11 @@ pub fn cast_ray(origin: Vec3, ray: Vec3) Vec3 {
                     hit_ray = sphere.reflect_ray(hit_ray, hit_origin);
                 },
             }
-
             attenuation = attenuation.mult(get_material_attenuation(header.material_ptr));
-        } else {
+        } else if (i_step == 0) {
             return attenuation;
+        } else {
+            return attenuation.scale(@max(0, hit_ray.x));
         }
     }
 
@@ -330,13 +360,13 @@ pub fn main() !void {
     var origin = Vec3.init(0.0, 0.0, 0.0);
 
     var red_diffuse: [*]u8 = Diffuse.alloc(
-        Vec3.init(1.0, 0.9, 0.9),
+        Vec3.init(1.0, 0.5, 0.5),
     );
     var green_diffuse: [*]u8 = Diffuse.alloc(
-        Vec3.init(0.9, 1.0, 0.9),
+        Vec3.init(0.5, 1.0, 0.5),
     );
     var blue_diffuse: [*]u8 = Diffuse.alloc(
-        Vec3.init(0.5, 0.5, 0.7),
+        Vec3.init(0.5, 0.5, 1.0),
     );
 
     Sphere.alloc(
@@ -354,6 +384,11 @@ pub fn main() !void {
         1.0,
         green_diffuse,
     );
+    Sphere.alloc(
+        Vec3.init(4.0, 0.0, -8.0),
+        3.0,
+        blue_diffuse,
+    );
     Plane.alloc(
         Vec3.init(0.0, -1.0, 0.0),
         Vec3.init(0.3, 1.0, -0.2),
@@ -362,8 +397,16 @@ pub fn main() !void {
 
     var i_pix: usize = 0;
     while (i_pix < N_PIXELS) : (i_pix += 1) {
-        var ray = get_cam2pix_ray(i_pix, SCREEN_WIDTH, SCREEN_HEIGHT, FOCAL_LEN);
-        var pix_color = cast_ray(origin, ray);
+        var pix_color = Vec3.init(0.0, 0.0, 0.0);
+        var i_aa: usize = 0;
+        var ray: Vec3 = undefined;
+        while (i_aa < N_AA_STEPS) : (i_aa += 1) {
+            ray = get_cam2pix_ray(i_pix, SCREEN_WIDTH, SCREEN_HEIGHT, FOCAL_LEN);
+            pix_color = pix_color.add(cast_ray(origin, ray));
+        }
+        pix_color = pix_color.scale(1.0 / @intToFloat(f32, N_AA_STEPS));
+        pix_color = pix_color.min(Vec3.init(1.0, 1.0, 1.0));
+
         DRAW_BUFFER[i_pix * 3 + 0] = @floatToInt(u8, pix_color.x * 255);
         DRAW_BUFFER[i_pix * 3 + 1] = @floatToInt(u8, pix_color.y * 255);
         DRAW_BUFFER[i_pix * 3 + 2] = @floatToInt(u8, pix_color.z * 255);
