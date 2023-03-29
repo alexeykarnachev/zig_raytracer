@@ -1,6 +1,8 @@
 const std = @import("std");
+const Timer = std.time.Timer;
 const math = std.math;
 const Vec3 = @import("vec.zig").Vec3;
+pub const log_level: std.log.Level = .info;
 
 const EPS = 1.0e-6;
 
@@ -60,10 +62,16 @@ pub fn render_world(
     world: World,
     camera: Camera,
     screen: Screen,
-) void {
-    const n_rays_per_pixel: usize = 128;
-    const max_n_ray_bounces: usize = 16;
+) !void {
+    var bounce_timer: Timer = try Timer.start();
+    var n_bounces: usize = 0;
+    var t_bounces: u64 = 0;
+
+    const n_rays_per_pixel: usize = 32;
+    const max_n_ray_bounces: usize = 32;
     const sky_material = Material{ .emission = Vec3.init(0.6, 0.5, 0.3) };
+
+    std.log.info("AA: {}, bounces (max): {}", .{ n_rays_per_pixel, max_n_ray_bounces });
 
     const screen_width = @intToFloat(f32, screen.width);
     const screen_height = @intToFloat(f32, screen.height);
@@ -104,7 +112,9 @@ pub fn render_world(
             var ray = pixel_position.sub(camera.position).normalize();
 
             var i_bounce: usize = 0;
+            bounce_timer.reset();
             while (i_bounce < max_n_ray_bounces) : (i_bounce += 1) {
+                n_bounces += 1;
                 var hit_dist = math.inf(f32);
                 var hit_position: Vec3 = undefined;
                 var hit_normal: Vec3 = undefined;
@@ -158,7 +168,7 @@ pub fn render_world(
                     break;
                 }
             }
-
+            t_bounces += bounce_timer.lap();
             final_pixel_color = final_pixel_color.add(pixel_color.scale(1.0 / @intToFloat(f32, n_rays_per_pixel)));
         }
 
@@ -166,6 +176,12 @@ pub fn render_world(
         screen.buffer[i_pixel * 3 + 0] = final_pixel_color.x;
         screen.buffer[i_pixel * 3 + 1] = final_pixel_color.y;
         screen.buffer[i_pixel * 3 + 2] = final_pixel_color.z;
+
+        if (i_pixel % SCREEN_WIDTH == 0) {
+            const progress: f32 = 100.0 * @intToFloat(f32, i_pixel + 1) / @intToFloat(f32, n_pixels);
+            const bounces_per_ms = @intToFloat(f32, n_bounces) / (@intToFloat(f32, t_bounces) / 1_000_000.0);
+            std.log.info("progress: {d:.2}%, bounces: {}, bounces/ms: {d:.6}", .{ progress, n_bounces, bounces_per_ms });
+        }
     }
 }
 
@@ -259,7 +275,7 @@ pub fn main() !void {
 
     const world: World = World{ .planes = &planes, .spheres = &spheres };
 
-    render_world(world, camera, screen);
+    try render_world(world, camera, screen);
     blit_screen_to_rgb(screen, &DRAW_BUFFER);
     try blit_rgb_to_ppm(
         &DRAW_BUFFER,
