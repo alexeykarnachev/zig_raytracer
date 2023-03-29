@@ -83,7 +83,8 @@ pub fn render_world(
         var pixel_position = screen_center.add(pixel_offset);
 
         // Cast ray
-        var min_t = math.inf(f32);
+        var hit_dist = math.inf(f32);
+        var hit_material: Material = undefined;
         var ray = pixel_position.sub(camera.position).normalize();
 
         // Try intersect ray with planes
@@ -93,8 +94,9 @@ pub fn render_world(
                 const normal = plane.normal.normalize();
                 const numer = (-normal.dot(camera.position) + plane.d);
                 const t = numer / denom;
-                if (t > 0.0 and t < min_t) {
-                    min_t = t;
+                if (t > 0.0 and t < hit_dist) {
+                    hit_dist = t;
+                    hit_material = plane.material;
                 }
             }
         }
@@ -110,16 +112,23 @@ pub fn render_world(
 
             if (d >= 0) {
                 const t = @min(-cos + @sqrt(d), -cos - @sqrt(d));
-                if (t > 0.0 and t < min_t) {
-                    min_t = t;
+                if (t > 0.0 and t < hit_dist) {
+                    hit_dist = t;
+                    hit_material = sphere.material;
                 }
             }
         }
 
-        min_t /= 18.0;
-        screen.buffer[i_pixel * 3 + 0] = min_t;
-        screen.buffer[i_pixel * 3 + 1] = min_t;
-        screen.buffer[i_pixel * 3 + 2] = min_t;
+        // TODO: For now it's just a plain albedo color for debug
+        if (hit_dist != math.inf(f32)) {
+            screen.buffer[i_pixel * 3 + 0] = hit_material.albedo.x;
+            screen.buffer[i_pixel * 3 + 1] = hit_material.albedo.y;
+            screen.buffer[i_pixel * 3 + 2] = hit_material.albedo.z;
+        } else {
+            screen.buffer[i_pixel * 3 + 0] = 0.3;
+            screen.buffer[i_pixel * 3 + 1] = 0.3;
+            screen.buffer[i_pixel * 3 + 2] = 0.9;
+        }
     }
 }
 
@@ -157,12 +166,28 @@ pub fn main() !void {
     };
 
     const planes = [_]Plane{
-        Plane{ .normal = Vec3.init(0.0, 1.0, 0.0), .d = -5.0 },
-        Plane{ .normal = Vec3.init(1.0, 0.0, 0.0), .d = -5.0 },
+        Plane{
+            .material = Material{ .albedo = Vec3.init(0.9, 0.8, 0.7) },
+            .normal = Vec3.init(0.0, 1.0, 0.0),
+            .d = -5.0,
+        },
+        Plane{
+            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9) },
+            .normal = Vec3.init(1.0, 0.0, 0.0),
+            .d = -5.0,
+        },
     };
     const spheres = [_]Sphere{
-        Sphere{ .position = Vec3.init(0.0, 0.0, 0.0), .radius = 1.0 },
-        Sphere{ .position = Vec3.init(2.0, 0.0, 0.0), .radius = 1.0 },
+        Sphere{
+            .material = Material{ .albedo = Vec3.init(0.6, 0.8, 0.5) },
+            .position = Vec3.init(0.0, 0.0, 0.0),
+            .radius = 1.0,
+        },
+        Sphere{
+            .material = Material{ .albedo = Vec3.init(0.8, 0.6, 0.5) },
+            .position = Vec3.init(2.0, 0.0, 0.0),
+            .radius = 1.0,
+        },
     };
 
     const world: World = World{ .planes = &planes, .spheres = &spheres };
