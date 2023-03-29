@@ -2,8 +2,11 @@ const std = @import("std");
 const Timer = std.time.Timer;
 const math = std.math;
 const Vec3 = @import("vec.zig").Vec3;
+var rnd = std.rand.DefaultPrng.init(0);
+
 pub const log_level: std.log.Level = .info;
 
+var RND_VECS_ON_SPHERE: [1 << 20]Vec3 = undefined;
 const EPS = 1.0e-6;
 
 const SCREEN_WIDTH: usize = 800;
@@ -67,8 +70,8 @@ pub fn render_world(
     var n_bounces: usize = 0;
     var t_bounces: u64 = 0;
 
-    const n_rays_per_pixel: usize = 32;
-    const max_n_ray_bounces: usize = 32;
+    const n_rays_per_pixel: usize = 128;
+    const max_n_ray_bounces: usize = 128;
     const sky_material = Material{ .emission = Vec3.init(0.6, 0.5, 0.3) };
 
     std.log.info("AA: {}, bounces (max): {}", .{ n_rays_per_pixel, max_n_ray_bounces });
@@ -124,8 +127,7 @@ pub fn render_world(
                 for (world.planes) |plane| {
                     const denom = plane.normal.dot(ray);
                     if (math.fabs(denom) > EPS) {
-                        const normal = plane.normal.normalize();
-                        const numer = (-normal.dot(ray_origin) - plane.d);
+                        const numer = (-plane.normal.dot(ray_origin) - plane.d);
                         const t = numer / denom;
                         if (t > 0.0 and t < hit_dist) {
                             hit_dist = t;
@@ -163,7 +165,16 @@ pub fn render_world(
                 attenuation = attenuation.mult(hit_material.albedo);
                 if (hit_dist != math.inf(f32)) {
                     ray_origin = hit_position;
-                    ray = ray.reflect(hit_normal, 1.0 - hit_material.specular);
+
+                    // The next line (commented) can produce the true
+                    // random vector on a sphere. But this is too slow...
+                    // Picking the precomputed random vector is 3-4
+                    // times faster
+                    // const perturb = Vec3.init_rnd_on_sphere().scale(1.0 - hit_material.specular);
+
+                    const perturb_idx = n_bounces % RND_VECS_ON_SPHERE.len;
+                    const perturb = RND_VECS_ON_SPHERE[perturb_idx].scale(1.0 - hit_material.specular);
+                    ray = ray.reflect(hit_normal).add(perturb).normalize();
                 } else {
                     break;
                 }
@@ -207,6 +218,11 @@ pub fn blit_rgb_to_ppm(
 }
 
 pub fn main() !void {
+    var i_vec: usize = 0;
+    while (i_vec < RND_VECS_ON_SPHERE.len) : (i_vec += 1) {
+        RND_VECS_ON_SPHERE[i_vec] = Vec3.init_rnd_on_sphere();
+    }
+
     const screen: Screen = Screen{
         .buffer = &SCREEN_BUFFER,
         .width = SCREEN_WIDTH,
@@ -219,40 +235,46 @@ pub fn main() !void {
     };
 
     const planes = [_]Plane{
+        // Bot
         Plane{
             .material = Material{ .albedo = Vec3.init(0.9, 0.8, 0.7) },
             .normal = Vec3.init(0.0, 1.0, 0.0),
             .d = 0.0,
         },
+        // Top
         Plane{
             .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.99 },
             .normal = Vec3.init(0.0, -1.0, 0.0),
             .d = -10.0,
         },
+        // Back
         Plane{
             .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
             .normal = Vec3.init(0.0, 0.0, -1.0),
             .d = -10.0,
         },
+        // Front
         Plane{
             .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
             .normal = Vec3.init(0.0, 0.0, 1.0),
             .d = -10.0,
         },
+        // Right
         Plane{
             .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
             .normal = Vec3.init(-1.0, 0.0, 0.0),
             .d = -10.0,
         },
+        // Left
         Plane{
-            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
+            .material = Material{ .albedo = Vec3.init(0.9, 0.9, 0.9), .specular = 0.5 },
             .normal = Vec3.init(1.0, 0.0, 0.0),
             .d = -10.0,
         },
     };
     const spheres = [_]Sphere{
         Sphere{
-            .material = Material{ .albedo = Vec3.init(1.0, 0.8, 0.0), .specular = 0.2 },
+            .material = Material{ .albedo = Vec3.init(0.5, 1.0, 1.0), .specular = 0.2 },
             .position = Vec3.init(3.0, 0.0, -2.0),
             .radius = 1.0,
         },

@@ -66,11 +66,9 @@ pub const Vec3 = struct {
         );
     }
 
-    pub fn reflect(self: Vec3, normal: Vec3, fuzz: f32) Vec3 {
+    pub fn reflect(self: Vec3, normal: Vec3) Vec3 {
         const reflected = self.sub(normal.scale(2.0 * self.dot(normal)));
-        const perturb = Vec3.init_rnd_on_sphere();
-        const scattered = reflected.add(perturb.scale(fuzz));
-        return scattered.normalize();
+        return reflected;
     }
 
     pub fn cross(self: Vec3, other: Vec3) Vec3 {
