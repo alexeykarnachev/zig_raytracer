@@ -2,7 +2,7 @@ const std = @import("std");
 const math = std.math;
 var rnd = std.rand.DefaultPrng.init(0);
 
-pub const Vec3 = packed struct {
+pub const Vec3 = struct {
     x: f32,
     y: f32,
     z: f32,
@@ -54,6 +54,10 @@ pub const Vec3 = packed struct {
         return self.scale(1.0 / self.length());
     }
 
+    pub fn with_length(self: Vec3, len: f32) Vec3 {
+        return self.normalize().scale(len);
+    }
+
     pub fn min(self: Vec3, other: Vec3) Vec3 {
         return Vec3.init(
             @min(self.x, other.x),
@@ -69,6 +73,15 @@ pub const Vec3 = packed struct {
         return scattered.normalize();
     }
 
+    pub fn cross(self: Vec3, other: Vec3) Vec3 {
+        const out: Vec3 = Vec3.init(
+            self.y * other.z - self.z * other.y,
+            self.z * other.x - self.x * other.z,
+            self.x * other.y - self.y * other.x,
+        );
+        return out;
+    }
+
     pub fn dot(self: Vec3, other: Vec3) f32 {
         return self.x * other.x + self.y * other.y + self.z * other.z;
     }
@@ -77,4 +90,3 @@ pub const Vec3 = packed struct {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
 };
-
