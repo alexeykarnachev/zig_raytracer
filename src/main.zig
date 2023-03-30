@@ -6,16 +6,21 @@ var rnd = std.rand.DefaultPrng.init(0);
 
 pub const log_level: std.log.Level = .info;
 
-var RND_VECS_ON_SPHERE: [1 << 20]Vec3 = undefined;
+const N_RND_NUMBERS: usize = 1 << 20;
+var RND_VECS_ON_SPHERE: [N_RND_NUMBERS]Vec3 = undefined;
+var RND_NUMBERS: [N_RND_NUMBERS]f32 = undefined;
 const EPS = 1.0e-6;
 
-const SCREEN_WIDTH: usize = 800;
-const SCREEN_HEIGHT: usize = 600;
+const SCREEN_WIDTH: usize = 400;
+const SCREEN_HEIGHT: usize = 400;
 var SCREEN_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]f32 = undefined;
 var DRAW_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]u8 = undefined;
 
-const CAMERA_POSITION: Vec3 = Vec3.init(-2.0, 2.0, 5.0);
-const CAMERA_FORWARD: Vec3 = Vec3.init(0.0, 0.4, -1.0).normalize();
+const CAMERA_POSITION: Vec3 = Vec3.init(0.0, 0.0, 5.0);
+const CAMERA_FORWARD: Vec3 = Vec3.init(0.0, 0.0, -1.0).normalize();
+const N_RAYS_PER_PIXEL = 1024;
+const MAX_N_RAY_BOUNCES = 16;
+const PIXEL_FUZZ = 1.0;
 
 pub const World = struct {
     planes: []const Plane,
@@ -61,18 +66,28 @@ pub const Sphere = struct {
     }
 };
 
+pub fn ns_to_ms(t: u64) f32 {
+    return @intToFloat(f32, t) / 1_000_000.0;
+}
+
+pub fn ns_to_s(t: u64) f32 {
+    return @intToFloat(f32, t) / 1_000_000_000.0;
+}
+
 pub fn render_world(
     world: World,
     camera: Camera,
     screen: Screen,
+    null_material: Material,
+    n_rays_per_pixel: usize,
+    max_n_ray_bounces: usize,
 ) !void {
+    var render_timer: Timer = try Timer.start();
     var bounce_timer: Timer = try Timer.start();
+    render_timer.reset();
+
     var n_bounces: usize = 0;
     var t_bounces: u64 = 0;
-
-    const n_rays_per_pixel: usize = 128;
-    const max_n_ray_bounces: usize = 128;
-    const sky_material = Material{ .emission = Vec3.init(0.6, 0.5, 0.3) };
 
     std.log.info("AA: {}, bounces (max): {}", .{ n_rays_per_pixel, max_n_ray_bounces });
 
@@ -104,7 +119,14 @@ pub fn render_world(
         var final_pixel_color = Vec3.init(0.0, 0.0, 0.0);
         var i_ray: usize = 0;
         while (i_ray < n_rays_per_pixel) : (i_ray += 1) {
-            var pixel_position = screen_center.add(pixel_offset);
+            var pixel_fuzz_x = RND_NUMBERS[(n_bounces + 0) % N_RND_NUMBERS];
+            var pixel_fuzz_y = RND_NUMBERS[(n_bounces + 1) % N_RND_NUMBERS];
+            var pixel_fuzz = Vec3.init(
+                pixel_fuzz_x * pixel_half_width * PIXEL_FUZZ,
+                pixel_fuzz_y * pixel_half_height * PIXEL_FUZZ,
+                0.0,
+            );
+            var pixel_position = screen_center.add(pixel_offset.add(pixel_fuzz));
 
             // Result color accumulator
             var attenuation: Vec3 = Vec3.init(1.0, 1.0, 1.0);
@@ -117,17 +139,21 @@ pub fn render_world(
             var i_bounce: usize = 0;
             bounce_timer.reset();
             while (i_bounce < max_n_ray_bounces) : (i_bounce += 1) {
+                if (attenuation.sum() < EPS) {
+                    break;
+                }
+
                 n_bounces += 1;
                 var hit_dist = math.inf(f32);
                 var hit_position: Vec3 = undefined;
                 var hit_normal: Vec3 = undefined;
-                var hit_material: Material = sky_material;
+                var hit_material: Material = null_material;
 
                 // Try intersect ray with planes
                 for (world.planes) |plane| {
                     const denom = plane.normal.dot(ray);
                     if (math.fabs(denom) > EPS) {
-                        const numer = (-plane.normal.dot(ray_origin) - plane.d);
+                        const numer = (-plane.normal.dot(ray_origin) + plane.d);
                         const t = numer / denom;
                         if (t > 0.0 and t < hit_dist) {
                             hit_dist = t;
@@ -166,13 +192,7 @@ pub fn render_world(
                 if (hit_dist != math.inf(f32)) {
                     ray_origin = hit_position;
 
-                    // The next line (commented) can produce the true
-                    // random vector on a sphere. But this is too slow...
-                    // Picking the precomputed random vector is 3-4
-                    // times faster
-                    // const perturb = Vec3.init_rnd_on_sphere().scale(1.0 - hit_material.specular);
-
-                    const perturb_idx = n_bounces % RND_VECS_ON_SPHERE.len;
+                    const perturb_idx = n_bounces % N_RND_NUMBERS;
                     const perturb = RND_VECS_ON_SPHERE[perturb_idx].scale(1.0 - hit_material.specular);
                     ray = ray.reflect(hit_normal).add(perturb).normalize();
                 } else {
@@ -190,10 +210,13 @@ pub fn render_world(
 
         if (i_pixel % SCREEN_WIDTH == 0) {
             const progress: f32 = 100.0 * @intToFloat(f32, i_pixel + 1) / @intToFloat(f32, n_pixels);
-            const bounces_per_ms = @intToFloat(f32, n_bounces) / (@intToFloat(f32, t_bounces) / 1_000_000.0);
+            const bounces_per_ms = @intToFloat(f32, n_bounces) / ns_to_ms(t_bounces);
             std.log.info("progress: {d:.2}%, bounces: {}, bounces/ms: {d:.6}", .{ progress, n_bounces, bounces_per_ms });
         }
     }
+
+    const t_render = render_timer.lap();
+    std.log.info("render time: {d:.2}s", .{ns_to_s(t_render)});
 }
 
 pub fn blit_screen_to_rgb(screen: Screen, rgb: []u8) void {
@@ -218,9 +241,10 @@ pub fn blit_rgb_to_ppm(
 }
 
 pub fn main() !void {
-    var i_vec: usize = 0;
-    while (i_vec < RND_VECS_ON_SPHERE.len) : (i_vec += 1) {
-        RND_VECS_ON_SPHERE[i_vec] = Vec3.init_rnd_on_sphere();
+    var i: usize = 0;
+    while (i < N_RND_NUMBERS) : (i += 1) {
+        RND_VECS_ON_SPHERE[i] = Vec3.init_rnd_on_sphere();
+        RND_NUMBERS[i] = 2.0 * rnd.random().float(f32) - 1.0;
     }
 
     const screen: Screen = Screen{
@@ -229,7 +253,7 @@ pub fn main() !void {
         .height = SCREEN_HEIGHT,
     };
     const camera: Camera = Camera{
-        .fov = 120.0 * math.pi / 180.0,
+        .fov = 90.0 * math.pi / 180.0,
         .position = CAMERA_POSITION,
         .forward = CAMERA_FORWARD,
     };
@@ -237,67 +261,46 @@ pub fn main() !void {
     const planes = [_]Plane{
         // Bot
         Plane{
-            .material = Material{ .albedo = Vec3.init(0.9, 0.8, 0.7) },
+            .material = Material{ .albedo = Vec3.init(0.7, 0.7, 0.7) },
             .normal = Vec3.init(0.0, 1.0, 0.0),
-            .d = 0.0,
-        },
-        // Top
-        Plane{
-            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.99 },
-            .normal = Vec3.init(0.0, -1.0, 0.0),
-            .d = -10.0,
-        },
-        // Back
-        Plane{
-            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
-            .normal = Vec3.init(0.0, 0.0, -1.0),
-            .d = -10.0,
-        },
-        // Front
-        Plane{
-            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
-            .normal = Vec3.init(0.0, 0.0, 1.0),
-            .d = -10.0,
-        },
-        // Right
-        Plane{
-            .material = Material{ .albedo = Vec3.init(0.7, 0.8, 0.9), .specular = 0.5 },
-            .normal = Vec3.init(-1.0, 0.0, 0.0),
-            .d = -10.0,
-        },
-        // Left
-        Plane{
-            .material = Material{ .albedo = Vec3.init(0.9, 0.9, 0.9), .specular = 0.5 },
-            .normal = Vec3.init(1.0, 0.0, 0.0),
-            .d = -10.0,
+            .d = -1.0,
         },
     };
+
     const spheres = [_]Sphere{
         Sphere{
-            .material = Material{ .albedo = Vec3.init(0.5, 1.0, 1.0), .specular = 0.2 },
-            .position = Vec3.init(3.0, 0.0, -2.0),
+            .material = Material{ .albedo = Vec3.init(0.3, 0.3, 0.3), .specular = 0.2 },
+            .position = Vec3.init(0.0, 0.0, 0.0),
             .radius = 1.0,
         },
         Sphere{
-            .material = Material{ .albedo = Vec3.init(0.2, 1.0, 0.2), .specular = 0.2 },
-            .position = Vec3.init(-2.0, 2.0, -1.0),
-            .radius = 1.0,
+            .material = Material{ .albedo = Vec3.init(0.9, 0.9, 1.0), .specular = 0.8 },
+            .position = Vec3.init(2.0, 2.0, -2.0),
+            .radius = 2.0,
         },
         Sphere{
-            .material = Material{ .albedo = Vec3.init(0.4, 0.8, 0.9), .specular = 0.2 },
-            .position = Vec3.init(1.0, 3.0, -1.0),
-            .radius = 1.0,
+            .material = Material{ .albedo = Vec3.init(1.0, 0.9, 0.9), .specular = 0.8 },
+            .position = Vec3.init(-2.0, 2.0, -2.0),
+            .radius = 2.0,
         },
         Sphere{
-            .material = Material{ .emission = Vec3.init(6.0, 6.0, 6.0) },
-            .position = Vec3.init(10.0, 15.0, -6.0),
+            .material = Material{ .emission = Vec3.init(5.0, 5.0, 5.0) },
+            .position = Vec3.init(0.0, 5.0, 0.0),
             .radius = 2.0,
         },
     };
 
-    const world: World = World{ .planes = &planes, .spheres = &spheres };
+    const world = World{ .planes = &planes, .spheres = &spheres };
+    const null_material = Material{ .emission = Vec3.init(0.6, 0.8, 1.0) };
 
-    try render_world(world, camera, screen);
+    try render_world(
+        world,
+        camera,
+        screen,
+        null_material,
+        N_RAYS_PER_PIXEL,
+        MAX_N_RAY_BOUNCES,
+    );
     blit_screen_to_rgb(screen, &DRAW_BUFFER);
     try blit_rgb_to_ppm(
         &DRAW_BUFFER,

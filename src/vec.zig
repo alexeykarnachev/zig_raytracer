@@ -80,6 +80,10 @@ pub const Vec3 = struct {
         return out;
     }
 
+    pub fn sum(self: Vec3) f32 {
+        return self.x + self.y + self.z;
+    }
+
     pub fn dot(self: Vec3, other: Vec3) f32 {
         return self.x * other.x + self.y * other.y + self.z * other.z;
     }
