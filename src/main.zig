@@ -6,21 +6,15 @@ var rnd = std.rand.DefaultPrng.init(0);
 
 pub const log_level: std.log.Level = .info;
 
+const EPS = 1.0e-6;
 const N_RND_NUMBERS: usize = 1 << 20;
 var RND_VECS_ON_SPHERE: [N_RND_NUMBERS]Vec3 = undefined;
 var RND_NUMBERS: [N_RND_NUMBERS]f32 = undefined;
-const EPS = 1.0e-6;
 
 const SCREEN_WIDTH: usize = 500;
 const SCREEN_HEIGHT: usize = 500;
 var SCREEN_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]f32 = undefined;
 var DRAW_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]u8 = undefined;
-
-const CAMERA_POSITION: Vec3 = Vec3.init(0.0, 2.0, 5.0);
-const CAMERA_FORWARD: Vec3 = Vec3.init(0.0, -0.3, -1.0).normalize();
-const N_RAYS_PER_PIXEL = 1000;
-const MAX_N_RAY_BOUNCES = 100;
-const PIXEL_FUZZ = 1.0;
 
 pub const World = struct {
     planes: []const Plane,
@@ -81,6 +75,7 @@ pub fn render_world(
     null_material: Material,
     n_rays_per_pixel: usize,
     max_n_ray_bounces: usize,
+    pixel_fuzz_strength: f32,
 ) !void {
     var render_timer: Timer = try Timer.start();
     var bounce_timer: Timer = try Timer.start();
@@ -122,8 +117,8 @@ pub fn render_world(
             var pixel_fuzz_x = RND_NUMBERS[(n_bounces + 0) % N_RND_NUMBERS];
             var pixel_fuzz_y = RND_NUMBERS[(n_bounces + 1) % N_RND_NUMBERS];
             var pixel_fuzz = Vec3.init(
-                pixel_fuzz_x * pixel_half_width * PIXEL_FUZZ,
-                pixel_fuzz_y * pixel_half_height * PIXEL_FUZZ,
+                pixel_fuzz_x * pixel_half_width * pixel_fuzz_strength,
+                pixel_fuzz_y * pixel_half_height * pixel_fuzz_strength,
                 0.0,
             );
             var pixel_position = screen_center.add(pixel_offset.add(pixel_fuzz));
@@ -216,7 +211,7 @@ pub fn render_world(
         screen.buffer[i_pixel * 3 + 1] = final_pixel_color.y;
         screen.buffer[i_pixel * 3 + 2] = final_pixel_color.z;
 
-        if (i_pixel % SCREEN_WIDTH == 0) {
+        if (i_pixel % screen.width == 0) {
             const progress: f32 = 100.0 * @intToFloat(f32, i_pixel + 1) / @intToFloat(f32, n_pixels);
             const bounces_per_ms = @intToFloat(f32, n_bounces) / ns_to_ms(t_bounces);
             std.log.info("progress: {d:.2}%, bounces: {}, bounces/ms: {d:.6}", .{ progress, n_bounces, bounces_per_ms });
@@ -262,8 +257,8 @@ pub fn main() !void {
     };
     const camera: Camera = Camera{
         .fov = 60.0 * math.pi / 180.0,
-        .position = CAMERA_POSITION,
-        .forward = CAMERA_FORWARD,
+        .position = Vec3.init(0.0, 2.0, 5.0),
+        .forward = Vec3.init(0.0, -0.3, -1.0).normalize(),
     };
 
     const planes = [_]Plane{
@@ -301,14 +296,19 @@ pub fn main() !void {
     const world = World{ .planes = &planes, .spheres = &spheres };
     const null_material = Material{ .emission = Vec3.init(0.05, 0.01, 0.005) };
 
+    const n_rays_per_pixel = 1000;
+    const max_n_ray_bounces = 100;
+    const pixel_fuzz_strength = 1.0;
     try render_world(
         world,
         camera,
         screen,
         null_material,
-        N_RAYS_PER_PIXEL,
-        MAX_N_RAY_BOUNCES,
+        n_rays_per_pixel,
+        max_n_ray_bounces,
+        pixel_fuzz_strength,
     );
+
     blit_screen_to_rgb(screen, &DRAW_BUFFER);
     try blit_rgb_to_ppm(
         &DRAW_BUFFER,
