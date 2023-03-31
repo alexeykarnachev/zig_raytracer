@@ -7,12 +7,13 @@ var rnd = std.rand.DefaultPrng.init(0);
 pub const log_level: std.log.Level = .info;
 
 const EPS = 1.0e-6;
-const N_RND_NUMBERS: usize = 1 << 20;
+const N_RND_NUMBERS: usize = 1 << 25;
 var RND_VECS_ON_SPHERE: [N_RND_NUMBERS]Vec3 = undefined;
-var RND_NUMBERS: [N_RND_NUMBERS]f32 = undefined;
+var RND_VECS_IN_CIRCLE: [N_RND_NUMBERS]Vec3 = undefined;
+var RND_VECS_IN_SQUARE: [N_RND_NUMBERS]Vec3 = undefined;
 
-const SCREEN_WIDTH: usize = 500;
-const SCREEN_HEIGHT: usize = 500;
+const SCREEN_WIDTH: usize = 400;
+const SCREEN_HEIGHT: usize = 400;
 var SCREEN_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]f32 = undefined;
 var DRAW_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]u8 = undefined;
 
@@ -22,10 +23,11 @@ pub const World = struct {
 };
 
 pub const Camera = struct {
-    fov: f32,
     position: Vec3,
     forward: Vec3,
     up: Vec3 = Vec3.init(0.0, 1.0, 0.0),
+    fov: f32,
+    aperture_size: f32,
 };
 
 pub const Screen = struct {
@@ -114,13 +116,8 @@ pub fn render_world(
         var final_pixel_color = Vec3.init(0.0, 0.0, 0.0);
         var i_ray: usize = 0;
         while (i_ray < n_rays_per_pixel) : (i_ray += 1) {
-            var pixel_fuzz_x = RND_NUMBERS[(n_bounces + 0) % N_RND_NUMBERS];
-            var pixel_fuzz_y = RND_NUMBERS[(n_bounces + 1) % N_RND_NUMBERS];
-            var pixel_fuzz = Vec3.init(
-                pixel_fuzz_x * pixel_half_width * pixel_fuzz_strength,
-                pixel_fuzz_y * pixel_half_height * pixel_fuzz_strength,
-                0.0,
-            );
+            var pixel_fuzz = RND_VECS_IN_SQUARE[n_bounces % N_RND_NUMBERS];
+            pixel_fuzz = pixel_fuzz.scale(pixel_half_width * pixel_fuzz_strength);
             var pixel_position = screen_center.add(pixel_offset.add(pixel_fuzz));
 
             // Result color accumulator
@@ -128,8 +125,11 @@ pub fn render_world(
             var pixel_color: Vec3 = Vec3.init(0.0, 0.0, 0.0);
 
             // Cast ray
-            var ray_origin = camera.position;
-            var ray = pixel_position.sub(camera.position).normalize();
+            var lense_fuzz = RND_VECS_IN_CIRCLE[n_bounces % N_RND_NUMBERS];
+            lense_fuzz = lense_fuzz.scale(camera.aperture_size);
+            lense_fuzz = camera_side.scale(lense_fuzz.x).add(camera.up.scale(lense_fuzz.y));
+            var ray_origin = camera.position.add(lense_fuzz);
+            var ray = pixel_position.sub(ray_origin).normalize();
 
             var i_bounce: usize = 0;
             bounce_timer.reset();
@@ -247,7 +247,8 @@ pub fn main() !void {
     var i: usize = 0;
     while (i < N_RND_NUMBERS) : (i += 1) {
         RND_VECS_ON_SPHERE[i] = Vec3.init_rnd_on_sphere();
-        RND_NUMBERS[i] = 2.0 * rnd.random().float(f32) - 1.0;
+        RND_VECS_IN_CIRCLE[i] = Vec3.init_rnd_in_circle();
+        RND_VECS_IN_SQUARE[i] = Vec3.init_rnd_in_square();
     }
 
     const screen: Screen = Screen{
@@ -256,9 +257,10 @@ pub fn main() !void {
         .height = SCREEN_HEIGHT,
     };
     const camera: Camera = Camera{
-        .fov = 60.0 * math.pi / 180.0,
         .position = Vec3.init(0.0, 2.0, 5.0),
         .forward = Vec3.init(0.0, -0.3, -1.0).normalize(),
+        .fov = 60.0 * math.pi / 180.0,
+        .aperture_size = 0.04,
     };
 
     const planes = [_]Plane{
@@ -294,9 +296,9 @@ pub fn main() !void {
     };
 
     const world = World{ .planes = &planes, .spheres = &spheres };
-    const null_material = Material{ .emission = Vec3.init(0.05, 0.01, 0.005) };
+    const null_material = Material{ .emission = Vec3.init(1.0, 1.0, 0.9) };
 
-    const n_rays_per_pixel = 1000;
+    const n_rays_per_pixel = 100;
     const max_n_ray_bounces = 100;
     const pixel_fuzz_strength = 1.0;
     try render_world(

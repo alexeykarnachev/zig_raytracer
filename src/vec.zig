@@ -11,6 +11,13 @@ pub const Vec3 = struct {
         return Vec3{ .x = x, .y = y, .z = z };
     }
 
+    pub fn init_rnd_in_square() Vec3 {
+        var x = rnd.random().float(f32) * 2.0 - 1.0;
+        var y = rnd.random().float(f32) * 2.0 - 1.0;
+        var vec = Vec3.init(x, y, 0.0);
+        return vec;
+    }
+
     pub fn init_rnd_on_sphere() Vec3 {
         var theta = 2.0 * math.pi * rnd.random().float(f32);
         var phi = math.acos(2.0 * rnd.random().float(f32) - 1.0);
@@ -20,6 +27,17 @@ pub const Vec3 = struct {
             math.cos(phi),
         );
         return vec.normalize();
+    }
+
+    pub fn init_rnd_in_circle() Vec3 {
+        var r = math.sqrt(rnd.random().float(f32));
+        var theta = rnd.random().float(f32) * 2.0 * math.pi;
+        var vec = Vec3.init(
+            r * math.cos(theta),
+            r * math.sin(theta),
+            0.0,
+        );
+        return vec;
     }
 
     pub fn sub(self: Vec3, other: Vec3) Vec3 {
