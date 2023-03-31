@@ -80,6 +80,15 @@ pub const Vec3 = struct {
         return out;
     }
 
+    pub fn to_srgb(self: Vec3) Vec3 {
+        const srgb: Vec3 = Vec3.init(
+            math.pow(f32, self.x, 1.0 / 2.2),
+            math.pow(f32, self.y, 1.0 / 2.2),
+            math.pow(f32, self.z, 1.0 / 2.2),
+        );
+        return srgb;
+    }
+
     pub fn sum(self: Vec3) f32 {
         return self.x + self.y + self.z;
     }

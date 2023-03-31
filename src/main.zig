@@ -11,15 +11,15 @@ var RND_VECS_ON_SPHERE: [N_RND_NUMBERS]Vec3 = undefined;
 var RND_NUMBERS: [N_RND_NUMBERS]f32 = undefined;
 const EPS = 1.0e-6;
 
-const SCREEN_WIDTH: usize = 400;
-const SCREEN_HEIGHT: usize = 400;
+const SCREEN_WIDTH: usize = 500;
+const SCREEN_HEIGHT: usize = 500;
 var SCREEN_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]f32 = undefined;
 var DRAW_BUFFER: [SCREEN_WIDTH * SCREEN_HEIGHT * 3]u8 = undefined;
 
-const CAMERA_POSITION: Vec3 = Vec3.init(0.0, 0.0, 5.0);
-const CAMERA_FORWARD: Vec3 = Vec3.init(0.0, 0.0, -1.0).normalize();
-const N_RAYS_PER_PIXEL = 1024;
-const MAX_N_RAY_BOUNCES = 16;
+const CAMERA_POSITION: Vec3 = Vec3.init(0.0, 2.0, 5.0);
+const CAMERA_FORWARD: Vec3 = Vec3.init(0.0, -0.3, -1.0).normalize();
+const N_RAYS_PER_PIXEL = 1000;
+const MAX_N_RAY_BOUNCES = 100;
 const PIXEL_FUZZ = 1.0;
 
 pub const World = struct {
@@ -154,7 +154,7 @@ pub fn render_world(
                     const denom = plane.normal.dot(ray);
                     if (math.fabs(denom) > EPS) {
                         const numer = (-plane.normal.dot(ray_origin) + plane.d);
-                        const t = numer / denom;
+                        const t = numer / denom - EPS;
                         if (t > 0.0 and t < hit_dist) {
                             hit_dist = t;
                             hit_position = ray_origin.add(ray.scale(t));
@@ -174,7 +174,7 @@ pub fn render_world(
                     }
 
                     if (d >= 0) {
-                        const t = @min(-cos + @sqrt(d), -cos - @sqrt(d));
+                        const t = @min(-cos + @sqrt(d), -cos - @sqrt(d)) - EPS;
                         if (t > 0.0 and t < hit_dist) {
                             hit_dist = t;
                             hit_position = ray_origin.add(ray.scale(t));
@@ -194,7 +194,14 @@ pub fn render_world(
 
                     const perturb_idx = n_bounces % N_RND_NUMBERS;
                     const perturb = RND_VECS_ON_SPHERE[perturb_idx].scale(1.0 - hit_material.specular);
-                    ray = ray.reflect(hit_normal).add(perturb).normalize();
+                    const hit_normal_perturb = hit_normal.add(perturb).normalize();
+                    const reflected_ray = ray.reflect(hit_normal_perturb);
+
+                    // TODO: I'm not sure that this is correct.
+                    // Learn more about Lambert's cosine law!
+                    attenuation = attenuation.scale(hit_normal_perturb.scale(-1.0).dot(ray));
+
+                    ray = reflected_ray;
                 } else {
                     break;
                 }
@@ -204,6 +211,7 @@ pub fn render_world(
         }
 
         // Write pixel color to the screen buffer
+        final_pixel_color = final_pixel_color.to_srgb();
         screen.buffer[i_pixel * 3 + 0] = final_pixel_color.x;
         screen.buffer[i_pixel * 3 + 1] = final_pixel_color.y;
         screen.buffer[i_pixel * 3 + 2] = final_pixel_color.z;
@@ -253,7 +261,7 @@ pub fn main() !void {
         .height = SCREEN_HEIGHT,
     };
     const camera: Camera = Camera{
-        .fov = 90.0 * math.pi / 180.0,
+        .fov = 60.0 * math.pi / 180.0,
         .position = CAMERA_POSITION,
         .forward = CAMERA_FORWARD,
     };
@@ -269,29 +277,29 @@ pub fn main() !void {
 
     const spheres = [_]Sphere{
         Sphere{
-            .material = Material{ .albedo = Vec3.init(0.3, 0.3, 0.3), .specular = 0.2 },
+            .material = Material{ .albedo = Vec3.init(0.05, 0.05, 0.05), .specular = 0.05 },
             .position = Vec3.init(0.0, 0.0, 0.0),
             .radius = 1.0,
         },
         Sphere{
-            .material = Material{ .albedo = Vec3.init(0.9, 0.9, 1.0), .specular = 0.8 },
-            .position = Vec3.init(2.0, 2.0, -2.0),
+            .material = Material{ .albedo = Vec3.init(0.7, 0.7, 1.0), .specular = 0.9 },
+            .position = Vec3.init(2.5, 2.0, -2.0),
             .radius = 2.0,
         },
         Sphere{
-            .material = Material{ .albedo = Vec3.init(1.0, 0.9, 0.9), .specular = 0.8 },
-            .position = Vec3.init(-2.0, 2.0, -2.0),
+            .material = Material{ .albedo = Vec3.init(1.0, 0.7, 0.7), .specular = 0.9 },
+            .position = Vec3.init(-2.5, 2.0, -2.0),
             .radius = 2.0,
         },
         Sphere{
-            .material = Material{ .emission = Vec3.init(5.0, 5.0, 5.0) },
-            .position = Vec3.init(0.0, 5.0, 0.0),
+            .material = Material{ .emission = Vec3.init(20.0, 20.0, 20.0) },
+            .position = Vec3.init(0.0, 6.0, 1.0),
             .radius = 2.0,
         },
     };
 
     const world = World{ .planes = &planes, .spheres = &spheres };
-    const null_material = Material{ .emission = Vec3.init(0.6, 0.8, 1.0) };
+    const null_material = Material{ .emission = Vec3.init(0.05, 0.01, 0.005) };
 
     try render_world(
         world,
