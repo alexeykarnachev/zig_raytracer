@@ -1,4 +1,5 @@
 const std = @import("std");
+const atomic = std.atomic;
 const Timer = std.time.Timer;
 const math = std.math;
 const Vec3 = @import("vec.zig").Vec3;
@@ -7,10 +8,6 @@ var rnd = std.rand.DefaultPrng.init(0);
 pub const log_level: std.log.Level = .info;
 
 const EPS = 1.0e-6;
-const N_RND_NUMBERS: usize = 1 << 25;
-var RND_VECS_ON_SPHERE: [N_RND_NUMBERS]Vec3 = undefined;
-var RND_VECS_IN_CIRCLE: [N_RND_NUMBERS]Vec3 = undefined;
-var RND_VECS_IN_SQUARE: [N_RND_NUMBERS]Vec3 = undefined;
 
 const SCREEN_WIDTH: usize = 400;
 const SCREEN_HEIGHT: usize = 400;
@@ -34,6 +31,11 @@ pub const Screen = struct {
     buffer: []f32,
     width: usize,
     height: usize,
+};
+
+pub const Quality = struct {
+    n_rays_per_pixel: usize,
+    max_n_ray_bounces: usize,
 };
 
 pub const Material = struct {
@@ -62,6 +64,38 @@ pub const Sphere = struct {
     }
 };
 
+pub const Jobs = struct {
+    n_jobs_total: usize = undefined,
+    n_jobs_left: atomic.Atomic(i32) = undefined,
+
+    pub fn init(n_jobs_total: usize) Jobs {
+        const n = @intCast(i32, n_jobs_total);
+        const n_jobs_left = atomic.Atomic(i32).init(n);
+        const jobs = Jobs{
+            .n_jobs_total = n_jobs_total,
+            .n_jobs_left = n_jobs_left,
+        };
+        return jobs;
+    }
+
+    pub fn get_job_id(self: *Jobs) i32 {
+        const n = @intCast(i32, self.n_jobs_total);
+        var a = self.n_jobs_left.fetchSub(1, atomic.Ordering.Release);
+        const job_id = n - a;
+        if (job_id >= n) {
+            return -1;
+        }
+        return job_id;
+    }
+};
+
+pub const Chunk = struct {
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+};
+
 pub fn ns_to_ms(t: u64) f32 {
     return @intToFloat(f32, t) / 1_000_000.0;
 }
@@ -70,41 +104,30 @@ pub fn ns_to_s(t: u64) f32 {
     return @intToFloat(f32, t) / 1_000_000_000.0;
 }
 
-pub fn render_world(
-    world: World,
-    camera: Camera,
-    screen: Screen,
-    null_material: Material,
-    n_rays_per_pixel: usize,
-    max_n_ray_bounces: usize,
-    pixel_fuzz_strength: f32,
-) !void {
-    var render_timer: Timer = try Timer.start();
+pub fn render_chunk(chunk: Chunk, world: World, camera: Camera, screen: Screen, quality: Quality, null_material: Material) !void {
     var bounce_timer: Timer = try Timer.start();
-    render_timer.reset();
-
     var n_bounces: usize = 0;
     var t_bounces: u64 = 0;
 
-    std.log.info("AA: {}, bounces (max): {}", .{ n_rays_per_pixel, max_n_ray_bounces });
-
     const screen_width = @intToFloat(f32, screen.width);
     const screen_height = @intToFloat(f32, screen.height);
-    const n_pixels = screen.width * screen.height;
     const pixel_half_width = 1.0 / (2.0 * screen_width);
     const pixel_half_height = 1.0 / (2.0 * screen_height);
     const aspect_ratio = screen_height / screen_width;
-    const camera_side = camera.forward.cross(camera.up).normalize();
     const camera_focal_len = math.cos(camera.fov * 0.5) / math.sin(camera.fov * 0.5);
     const screen_center = camera.position.add(camera.forward.with_length(camera_focal_len));
+    const camera_side = camera.forward.cross(camera.up).normalize();
+    const n_pixels = chunk.w * chunk.h;
 
     var i_pixel: usize = 0;
     while (i_pixel < n_pixels) : (i_pixel += 1) {
         // Find the pixel position on a screen
-        var pixel_row = @floor(@intToFloat(f32, i_pixel) / screen_width);
-        var pixel_col = @intToFloat(f32, i_pixel) - (pixel_row * screen_width);
-        var pixel_screen_x = pixel_half_width + (2.0 * pixel_col / screen_width) - 1.0;
-        var pixel_screen_y = pixel_half_height + (2.0 - 2.0 * pixel_row / screen_height) - 1.0;
+        var chunk_local_row = i_pixel / chunk.w;
+        var chunk_local_col = i_pixel - chunk_local_row * chunk.w;
+        var pixel_row = chunk_local_row + chunk.y;
+        var pixel_col = chunk_local_col + chunk.x;
+        var pixel_screen_x = pixel_half_width + (2.0 * @intToFloat(f32, pixel_col) / screen_width) - 1.0;
+        var pixel_screen_y = pixel_half_height + (2.0 - 2.0 * @intToFloat(f32, pixel_row) / screen_height) - 1.0;
         pixel_screen_y *= aspect_ratio;
 
         // Find the pixel base offset ralative to the screen center
@@ -115,9 +138,9 @@ pub fn render_world(
         // Cast many rays for one pixel (aka anti-aliasing)
         var final_pixel_color = Vec3.init(0.0, 0.0, 0.0);
         var i_ray: usize = 0;
-        while (i_ray < n_rays_per_pixel) : (i_ray += 1) {
-            var pixel_fuzz = RND_VECS_IN_SQUARE[n_bounces % N_RND_NUMBERS];
-            pixel_fuzz = pixel_fuzz.scale(pixel_half_width * pixel_fuzz_strength);
+        while (i_ray < quality.n_rays_per_pixel) : (i_ray += 1) {
+            var pixel_fuzz = Vec3.init_rnd_in_square();
+            pixel_fuzz = pixel_fuzz.scale(pixel_half_width);
             var pixel_position = screen_center.add(pixel_offset.add(pixel_fuzz));
 
             // Result color accumulator
@@ -125,7 +148,7 @@ pub fn render_world(
             var pixel_color: Vec3 = Vec3.init(0.0, 0.0, 0.0);
 
             // Cast ray
-            var lense_fuzz = RND_VECS_IN_CIRCLE[n_bounces % N_RND_NUMBERS];
+            var lense_fuzz = Vec3.init_rnd_in_circle();
             lense_fuzz = lense_fuzz.scale(camera.aperture_size);
             lense_fuzz = camera_side.scale(lense_fuzz.x).add(camera.up.scale(lense_fuzz.y));
             var ray_origin = camera.position.add(lense_fuzz);
@@ -133,7 +156,7 @@ pub fn render_world(
 
             var i_bounce: usize = 0;
             bounce_timer.reset();
-            while (i_bounce < max_n_ray_bounces) : (i_bounce += 1) {
+            while (i_bounce < quality.max_n_ray_bounces) : (i_bounce += 1) {
                 if (attenuation.sum() < EPS) {
                     break;
                 }
@@ -187,8 +210,7 @@ pub fn render_world(
                 if (hit_dist != math.inf(f32)) {
                     ray_origin = hit_position;
 
-                    const perturb_idx = n_bounces % N_RND_NUMBERS;
-                    const perturb = RND_VECS_ON_SPHERE[perturb_idx].scale(1.0 - hit_material.specular);
+                    const perturb = Vec3.init_rnd_on_sphere().scale(1.0 - hit_material.specular);
                     const hit_normal_perturb = hit_normal.add(perturb).normalize();
                     const reflected_ray = ray.reflect(hit_normal_perturb);
 
@@ -202,20 +224,66 @@ pub fn render_world(
                 }
             }
             t_bounces += bounce_timer.lap();
-            final_pixel_color = final_pixel_color.add(pixel_color.scale(1.0 / @intToFloat(f32, n_rays_per_pixel)));
+            final_pixel_color = final_pixel_color.add(pixel_color.scale(1.0 / @intToFloat(f32, quality.n_rays_per_pixel)));
         }
 
         // Write pixel color to the screen buffer
         final_pixel_color = final_pixel_color.to_srgb();
-        screen.buffer[i_pixel * 3 + 0] = final_pixel_color.x;
-        screen.buffer[i_pixel * 3 + 1] = final_pixel_color.y;
-        screen.buffer[i_pixel * 3 + 2] = final_pixel_color.z;
+        var idx = pixel_row * screen.width + pixel_col;
+        screen.buffer[idx * 3 + 0] = final_pixel_color.x;
+        screen.buffer[idx * 3 + 1] = final_pixel_color.y;
+        screen.buffer[idx * 3 + 2] = final_pixel_color.z;
+    }
 
-        if (i_pixel % screen.width == 0) {
-            const progress: f32 = 100.0 * @intToFloat(f32, i_pixel + 1) / @intToFloat(f32, n_pixels);
-            const bounces_per_ms = @intToFloat(f32, n_bounces) / ns_to_ms(t_bounces);
-            std.log.info("progress: {d:.2}%, bounces: {}, bounces/ms: {d:.6}", .{ progress, n_bounces, bounces_per_ms });
+    const bounces_per_ms = @intToFloat(f32, n_bounces) / ns_to_ms(t_bounces);
+    std.log.info("bounces/ms: {d:.6}", .{bounces_per_ms});
+}
+
+pub fn render_world(
+    world: World,
+    camera: Camera,
+    screen: Screen,
+    quality: Quality,
+    null_material: Material,
+) !void {
+    var render_timer: Timer = try Timer.start();
+    render_timer.reset();
+
+    std.log.info(
+        "rays/pixel: {}, bounces (max): {}",
+        .{ quality.n_rays_per_pixel, quality.max_n_ray_bounces },
+    );
+
+    var chunk_width: usize = 64;
+    var chunk_height: usize = 64;
+    var n_chunks_x = (screen.width + chunk_width - 1) / chunk_width;
+    var n_chunks_y = (screen.height + chunk_height - 1) / chunk_height;
+    var n_jobs = n_chunks_x * n_chunks_y;
+    var jobs = Jobs.init(n_jobs);
+    while (true) {
+        const job_id = jobs.get_job_id();
+        if (job_id == -1) {
+            break;
         }
+
+        const chunk_id = @intCast(usize, job_id);
+        const chunk_row = chunk_id / n_chunks_x;
+        const chunk_col = chunk_id - chunk_row * n_chunks_x;
+        const x = chunk_col * chunk_width;
+        const y = chunk_row * chunk_height;
+        const w = @min(chunk_width, screen.width - x);
+        const h = @min(chunk_height, screen.height - y);
+        const chunk = Chunk{ .x = x, .y = y, .w = w, .h = h };
+        try render_chunk(
+            chunk,
+            world,
+            camera,
+            screen,
+            quality,
+            null_material,
+        );
+
+        std.log.info("job done: {}/{}", .{ job_id + 1, n_jobs });
     }
 
     const t_render = render_timer.lap();
@@ -244,24 +312,18 @@ pub fn blit_rgb_to_ppm(
 }
 
 pub fn main() !void {
-    var i: usize = 0;
-    while (i < N_RND_NUMBERS) : (i += 1) {
-        RND_VECS_ON_SPHERE[i] = Vec3.init_rnd_on_sphere();
-        RND_VECS_IN_CIRCLE[i] = Vec3.init_rnd_in_circle();
-        RND_VECS_IN_SQUARE[i] = Vec3.init_rnd_in_square();
-    }
-
-    const screen: Screen = Screen{
+    const screen = Screen{
         .buffer = &SCREEN_BUFFER,
         .width = SCREEN_WIDTH,
         .height = SCREEN_HEIGHT,
     };
-    const camera: Camera = Camera{
+    const camera = Camera{
         .position = Vec3.init(0.0, 2.0, 5.0),
         .forward = Vec3.init(0.0, -0.3, -1.0).normalize(),
         .fov = 60.0 * math.pi / 180.0,
-        .aperture_size = 0.04,
+        .aperture_size = 0.01,
     };
+    const quality = Quality{ .n_rays_per_pixel = 1024, .max_n_ray_bounces = 8 };
 
     const planes = [_]Plane{
         // Bot
@@ -298,17 +360,12 @@ pub fn main() !void {
     const world = World{ .planes = &planes, .spheres = &spheres };
     const null_material = Material{ .emission = Vec3.init(1.0, 1.0, 0.9) };
 
-    const n_rays_per_pixel = 100;
-    const max_n_ray_bounces = 100;
-    const pixel_fuzz_strength = 1.0;
     try render_world(
         world,
         camera,
         screen,
+        quality,
         null_material,
-        n_rays_per_pixel,
-        max_n_ray_bounces,
-        pixel_fuzz_strength,
     );
 
     blit_screen_to_rgb(screen, &DRAW_BUFFER);

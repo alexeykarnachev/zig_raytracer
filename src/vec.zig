@@ -1,6 +1,10 @@
 const std = @import("std");
 const math = std.math;
-var rnd = std.rand.DefaultPrng.init(0);
+var rnd = std.rand.Xoroshiro128.init(228);
+
+fn randf() f32 {
+    return rnd.random().float(f32);
+}
 
 pub const Vec3 = struct {
     x: f32,
@@ -12,15 +16,15 @@ pub const Vec3 = struct {
     }
 
     pub fn init_rnd_in_square() Vec3 {
-        var x = rnd.random().float(f32) * 2.0 - 1.0;
-        var y = rnd.random().float(f32) * 2.0 - 1.0;
+        var x = randf() * 2.0 - 1.0;
+        var y = randf() * 2.0 - 1.0;
         var vec = Vec3.init(x, y, 0.0);
         return vec;
     }
 
     pub fn init_rnd_on_sphere() Vec3 {
-        var theta = 2.0 * math.pi * rnd.random().float(f32);
-        var phi = math.acos(2.0 * rnd.random().float(f32) - 1.0);
+        var theta = 2.0 * math.pi * randf();
+        var phi = math.acos(2.0 * randf() - 1.0);
         var vec = Vec3.init(
             math.cos(theta) * math.sin(phi),
             math.sin(theta) * math.sin(phi),
@@ -30,8 +34,8 @@ pub const Vec3 = struct {
     }
 
     pub fn init_rnd_in_circle() Vec3 {
-        var r = math.sqrt(rnd.random().float(f32));
-        var theta = rnd.random().float(f32) * 2.0 * math.pi;
+        var r = randf();
+        var theta = randf() * 2.0 * math.pi;
         var vec = Vec3.init(
             r * math.cos(theta),
             r * math.sin(theta),
