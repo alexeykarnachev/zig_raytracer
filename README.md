@@ -1,9 +1,11 @@
 # ZIG RAYTRACER
 Simple software (cpu) raytracer written in Zig
-![thumbnail](./thumbnail.ppm)
+
+![thumbnail](./thumbnail.png)
 
 
 ## Quick Start
+
 [Install zig](https://ziglang.org/learn/getting-started/)
 
 
