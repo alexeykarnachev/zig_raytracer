@@ -239,27 +239,17 @@ pub fn render_chunk(chunk: Chunk, world: World, camera: Camera, screen: Screen, 
     std.log.info("bounces/ms: {d:.6}", .{bounces_per_ms});
 }
 
-pub fn render_world(
+pub fn _render_world(
+    jobs: *Jobs,
     world: World,
     camera: Camera,
     screen: Screen,
     quality: Quality,
     null_material: Material,
+    n_chunks_x: usize,
+    chunk_width: usize,
+    chunk_height: usize,
 ) !void {
-    var render_timer: Timer = try Timer.start();
-    render_timer.reset();
-
-    std.log.info(
-        "rays/pixel: {}, bounces (max): {}",
-        .{ quality.n_rays_per_pixel, quality.max_n_ray_bounces },
-    );
-
-    var chunk_width: usize = 64;
-    var chunk_height: usize = 64;
-    var n_chunks_x = (screen.width + chunk_width - 1) / chunk_width;
-    var n_chunks_y = (screen.height + chunk_height - 1) / chunk_height;
-    var n_jobs = n_chunks_x * n_chunks_y;
-    var jobs = Jobs.init(n_jobs);
     while (true) {
         const job_id = jobs.get_job_id();
         if (job_id == -1) {
@@ -283,7 +273,51 @@ pub fn render_world(
             null_material,
         );
 
-        std.log.info("job done: {}/{}", .{ job_id + 1, n_jobs });
+        std.log.info("job done: {}/{}", .{ job_id + 1, jobs.n_jobs_total });
+    }
+}
+
+pub fn render_world(
+    world: World,
+    camera: Camera,
+    screen: Screen,
+    quality: Quality,
+    null_material: Material,
+) !void {
+    var render_timer: Timer = try Timer.start();
+    render_timer.reset();
+
+    std.log.info(
+        "rays/pixel: {}, bounces (max): {}",
+        .{ quality.n_rays_per_pixel, quality.max_n_ray_bounces },
+    );
+
+    var chunk_width: usize = 32;
+    var chunk_height: usize = 32;
+    var n_chunks_x = (screen.width + chunk_width - 1) / chunk_width;
+    var n_chunks_y = (screen.height + chunk_height - 1) / chunk_height;
+    var n_jobs = n_chunks_x * n_chunks_y;
+    var jobs = Jobs.init(n_jobs);
+
+    const n_threads: usize = 8;
+    var threads: [n_threads]std.Thread = undefined;
+    var i: usize = 0;
+    while (i < n_threads) : (i += 1) {
+        threads[i] = try std.Thread.spawn(.{}, _render_world, .{
+            &jobs,
+            world,
+            camera,
+            screen,
+            quality,
+            null_material,
+            n_chunks_x,
+            chunk_width,
+            chunk_height,
+        });
+    }
+
+    for (threads) |thread| {
+        thread.join();
     }
 
     const t_render = render_timer.lap();
