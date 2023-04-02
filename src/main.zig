@@ -352,12 +352,12 @@ pub fn main() !void {
         .height = SCREEN_HEIGHT,
     };
     const camera = Camera{
-        .position = Vec3.init(0.0, 2.0, 5.0),
-        .forward = Vec3.init(0.0, -0.3, -1.0).normalize(),
-        .fov = 60.0 * math.pi / 180.0,
+        .position = Vec3.init(0.0, 2.0, 7.0),
+        .forward = Vec3.init(0.0, 0.0, -1.0).normalize(),
+        .fov = 90.0 * math.pi / 180.0,
         .aperture_size = 0.01,
     };
-    const quality = Quality{ .n_rays_per_pixel = 1024, .max_n_ray_bounces = 8 };
+    const quality = Quality{ .n_rays_per_pixel = 10000, .max_n_ray_bounces = 128 };
 
     const planes = [_]Plane{
         // Bot
@@ -365,6 +365,24 @@ pub fn main() !void {
             .material = Material{ .albedo = Vec3.init(0.7, 0.7, 0.7) },
             .normal = Vec3.init(0.0, 1.0, 0.0),
             .d = -1.0,
+        },
+        // Top
+        Plane{
+            .material = Material{ .albedo = Vec3.init(0.7, 0.7, 0.7) },
+            .normal = Vec3.init(0.0, -1.0, 0.0),
+            .d = -10.0,
+        },
+        // Left
+        Plane{
+            .material = Material{ .albedo = Vec3.init(0.7, 0.7, 0.7) },
+            .normal = Vec3.init(1.0, 0.0, 0.0),
+            .d = -5.0,
+        },
+        // Right
+        Plane{
+            .material = Material{ .albedo = Vec3.init(0.7, 0.7, 0.7) },
+            .normal = Vec3.init(-1.0, 0.0, 0.0),
+            .d = -5.0,
         },
     };
 
@@ -385,8 +403,33 @@ pub fn main() !void {
             .radius = 2.0,
         },
         Sphere{
-            .material = Material{ .emission = Vec3.init(20.0, 20.0, 20.0) },
-            .position = Vec3.init(0.0, 6.0, 1.0),
+            .material = Material{ .emission = Vec3.init(20.0, 20.0, 10.0) },
+            .position = Vec3.init(0.0, 10.0, 0.0),
+            .radius = 2.0,
+        },
+        Sphere{
+            .material = Material{ .emission = Vec3.init(15.0, 15.0, 7.0) },
+            .position = Vec3.init(0.0, 10.0, -20.0),
+            .radius = 2.0,
+        },
+        Sphere{
+            .material = Material{ .emission = Vec3.init(10.0, 10.0, 5.0) },
+            .position = Vec3.init(0.0, 10.0, -40.0),
+            .radius = 2.0,
+        },
+        Sphere{
+            .material = Material{ .emission = Vec3.init(5.0, 5.0, 2.5) },
+            .position = Vec3.init(0.0, 10.0, -60.0),
+            .radius = 2.0,
+        },
+        Sphere{
+            .material = Material{ .emission = Vec3.init(3.0, 3.0, 1.5) },
+            .position = Vec3.init(0.0, 10.0, -80.0),
+            .radius = 2.0,
+        },
+        Sphere{
+            .material = Material{ .emission = Vec3.init(1.0, 1.0, 0.5) },
+            .position = Vec3.init(0.0, 10.0, -100.0),
             .radius = 2.0,
         },
     };
